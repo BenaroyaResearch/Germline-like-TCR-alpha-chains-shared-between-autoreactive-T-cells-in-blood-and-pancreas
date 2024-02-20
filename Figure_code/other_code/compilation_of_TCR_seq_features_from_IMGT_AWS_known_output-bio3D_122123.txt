@@ -1,0 +1,504 @@
+
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(gdata)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+library(scales)
+library(qualV)
+library(readxl)
+library(stringr)
+library(bio3d)
+
+setwd("/Users/peterlinsley/Dropbox/RNAseq/Maki_Nakayama/Levenshtein_coefficients_IAR_cells") # 
+
+## load public and private TCRs
+
+## add Fari's antigen specificity
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+oldAg = read.csv("TCRs_specificity_accounting.csv", stringsAsFactors = F)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+ag = read_excel("Table_S3_TCR_sequences_from_single_cell_RNA-seq_experiments.xlsx", sheet = 3)
+ag = subset(ag, !peptide_specificity == "galactosylceramide") # remove iNKT
+
+dr = read.csv("IAR_TCR_dose_reponse_curves.csv", stringsAsFactors = F)
+
+spec = read_excel("Table_S3_TCR_sequences_from_single_cell_RNA-seq_experiments.xlsx", sheet = 3)
+
+spec$test = ifelse(spec$donors == "HC6" & spec$peptide_specificity == "multiple", spec$peptide_specificity == "GAD 377-396", spec$peptide_specificity == spec$peptide_specificity)
+
+## load all TCRs
+
+tcrsFull = read_excel("Table_S3_TCR_sequences_from_single_cell_RNA-seq_experiments.xlsx", sheet = 1)
+## load and modify peptides
+
+peps = read_excel("Table S2. Islet antigen peptides used for T cell stimulation.xlsx")
+
+names = peps[1,]
+peps = peps[-1,]
+colnames(peps) = names
+peps = peps[-(36:38),]
+
+peps$pepRange = paste(peps$Start, peps$End, sep = "-")
+peps$pepConcat = paste(peps$Protein, peps$pepRange, sep = " ")
+
+## load levenshtein index comparisons-----HAVE
+
+lev = read.csv("Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+levSub = subset(lev, lv <2); nrow(levSub) # 1389
+
+## load old contacts- from Clones having titration data
+
+contacts = read.delim("compiled_PIT_matched_TCRs_compiled_peptide_contacts_072623.txt", stringsAsFactors = F)
+contacts = na.omit(contacts)
+
+contacts$traR13 = contacts$chain1.cdr1/contacts$chain.1.cdr3
+contacts$trbR13 = contacts$chain2.cdr1/contacts$chain.2.cdr3
+
+contacts$pepName = gsub("_", " ", contacts$pepName)
+
+mCont = melt(contacts, measure.vars = c("chain1.cdr1",	"chain.1.cdr2", "chain.1.cdr3", "chain2.cdr1",	"chain.2.cdr2",	"chain.2.cdr3", "otherTRA",	"otherTRB"))
+
+colnames(mCont) = gsub("value","contacts", colnames(mCont))
+mCont$variable = gsub("chain1.cdr1","TraCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.1.cdr1","TraCDR2", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.1.cdr2","TraCDR2", mCont$variable, fixed = T)
+
+mCont$variable = gsub("chain2.cdr1","TrbCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr1","TrbCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr2","TrbCDR2", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr3","TrbCDR3", mCont$variable, fixed = T)
+mCont$variable = gsub("otherTRA","TraOther", mCont$variable, fixed = T)
+mCont$variable = gsub("otherTRB","TrbOther", mCont$variable, fixed = T)
+
+mCont$variable = gsub("chain.1.cdr3","TraCDR3", mCont$variable, fixed = T)
+
+#mCont$variable = factor(mCont$variable, levels = )
+mCont$chain = ifelse(mCont$variable %in% grep("Tra", mCont$variable, value = T), "TRA", 
+				ifelse(mCont$variable %in% grep("Trb", mCont$variable, value = T), "TRB","other"))
+				
+## load aIMGT results for all IAR TCRs
+
+####-NEED THIS FILE
+
+imgtFull = read.delim("/Users/peterlinsley/Dropbox/RNAseq/P91_Karen_Junbao/IMGT_all_TCRs/IAR_CD4_T_cell_all_seqs/5_AA-sequences.txt", stringsAsFactors = F)
+imgtFull$cloneID = tcrsFull$cloneID[match(imgtFull$JUNCTION, tcrsFull$junction)]
+
+imgtA = subset(imgtFull, V.GENE.and.allele %in% grep("TRA", V.GENE.and.allele, value = T))
+#imgtA$V.D.J.REGION = NULL
+
+imgtB = imgtFull
+imgtB = subset(imgtFull, V.GENE.and.allele %in% grep("TRB", V.GENE.and.allele, value = T))
+
+#imgtB$V.J.REGION = NULL
+#colnames(imgtB) = gsub("V.D.J.REGION", "V.J.REGION", colnames(imgtB))
+
+imgt = rbind(imgtA, imgtB)
+
+## Tests. calculate intersect of Clones with all ag specificities versus Clones analyzded for contacts 
+
+length(intersect(contacts$CloneID, spec$cloneID)) # 22
+length(setdiff(contacts$CloneID, spec$cloneID)) # 2
+length(intersect(contacts$CloneID, tcrsFull$cloneID)) # 22
+length(intersect(spec$cloneID, tcrsFull$cloneID)) # 47
+length(intersect(contacts$TRA.junction, spec$junction_alpha)) # 23
+length(setdiff(contacts$TRA.junction, spec$junction_alpha)) # 0
+
+length(intersect(tcrsFull$cloneID, contacts$CloneID)) # 22
+length(intersect(tcrsFull$junction, contacts$TRA.junction)) # 23
+
+##########################
+## subset TCRs with known specificity and add IMGT info 
+
+## break TCRs into separate TRA and TRB junction subsets & rename columns 
+subA = spec
+subA$junction_beta = NULL
+subA$v_gene_beta = NULL
+subA$j_gene_beta = NULL
+names(subA) [names(subA) == "junction_alpha"] <- "junction"
+names(subA) [names(subA) == "v_gene_alpha"] <- "vGene"
+names(subA) [names(subA) == "j_gene_alpha"] <- "jGene"
+
+subB = spec
+subB$junction_alpha = NULL
+subB$v_gene_alpha = NULL
+subB$j_gene_alpha = NULL
+names(subB) [names(subB) == "junction_beta"] <- "junction"
+names(subB) [names(subB) == "v_gene_beta"] <- "vGene"
+names(subB) [names(subB) == "j_gene_beta"] <- "jGene"
+spec2 = rbind(subA, subB)
+
+######################
+## reformat and save all TCRs for which we know specificity
+
+spec = read_excel("Table_S3_TCR_sequences_from_single_cell_RNA-seq_experiments.xlsx", sheet = 3)
+
+spec$PITmatch = spec$junction_alpha %in% levSub$aJunc1
+spec$traLen = nchar(spec$junction_alpha)
+spec$trbLen = nchar(spec$junction_beta)
+
+## change multiple peptide specificities to GAD 377-396, which was one of theh peptides bound by all three multispecific TCRs
+
+spec[18, "peptide_specificity"] <- c("GAD65 377-396") # HC6
+spec[21, "peptide_specificity"] <- c("GAD65 377-396") # HC10
+spec[46, "peptide_specificity"] <- c("GAD65 377-396") # 10507
+
+spec$peptide_specificity = gsub("_", " ", spec$peptide_specificity)
+spec$pepSeq = peps$Sequence[match(spec$peptide_specificity, peps$pepConcat)]
+
+## subset to know specificities
+
+specSub = subset(spec, !peptide_specificity == "none" & !peptide_specificity == "galactosylceramide")
+
+intersect(specSub$peptide_specificity, contacts$pepName) #9
+setdiff(specSub$cloneID, contacts$CloneID) # 6 new models to make
+setdiff(contacts$CloneID, specSub$cloneID)  # only Clone_855 which was split into two becasue it has two TRA chains (Clone_855A, Clone_855B)
+
+## check manually pulled sequences versus computatioinally pulled
+
+contacts$fullTRA = imgtA$V.J.REGION[match(contacts$TRA.junction, imgtA$JUNCTION)]
+
+## repair faulty sequence- chose non-representative full nt sequence from TCRsfull
+contacts[10, "fullTRA"] <- contacts[10, "fullTRAseq"]
+
+contacts$fullTRB = imgtB$V.D.J.REGION[match(contacts$TRB.junction, imgtB$JUNCTION)]
+
+table(contacts$fullTRA == contacts$fullTRAseq)
+
+contacts$tra.CDR1 = imgtA$CDR1.IMGT[match(contacts$TRA.junction, imgtA$JUNCTION)]
+contacts$tra.CDR2 = imgtA$CDR2.IMGT[match(contacts$TRA.junction, imgtA$JUNCTION)]
+contacts$tra.CDR3 = imgtA$CDR3.IMGT[match(contacts$TRA.junction, imgtA$JUNCTION)]
+
+contacts$trb.CDR1 = imgtB$CDR1.IMGT[match(contacts$TRB.junction, imgtB$JUNCTION)]
+contacts$trb.CDR2 = imgtB$CDR2.IMGT[match(contacts$TRB.junction, imgtB$JUNCTION)]
+contacts$trb.CDR3 = imgtB$CDR3.IMGT[match(contacts$TRB.junction, imgtB$JUNCTION)]
+
+## add 5' and 3' J info
+
+x = imgtA$J.REGION
+y = imgtA$JUNCTION
+
+imgtA$fiveJ = as.character(sapply(seq_along(x), function(i)
+    paste(LCS(strsplit(x[i], '')[[1]], strsplit(y[i], '')[[1]])$LCS,
+          collapse = "")))
+colnames(imgtA)[ncol(imgtA)] = c("fiveJ")
+
+spec$tra.fiveJ = imgtA$fiveJ[match(spec$junction_alpha, imgtA$JUNCTION)]
+
+x = imgtB$J.REGION
+y = imgtB$JUNCTION
+
+imgtB$fiveJ = as.character(sapply(seq_along(x), function(i)
+    paste(LCS(strsplit(x[i], '')[[1]], strsplit(y[i], '')[[1]])$LCS,
+          collapse = "")))
+colnames(imgtB)[ncol(imgtB)] = c("fiveJ")
+
+spec$tra.fiveJ = imgtA$fiveJ[match(spec$junction_alpha, imgtA$JUNCTION)]
+spec$trb.fiveJ = imgtB$fiveJ[match(spec$junction_beta, imgtB$JUNCTION)]
+
+## tests of manual versus computational
+
+all(contacts$fullTRAseq == contacts$fullTRA) # TRUE
+all(contacts$fullTRBseq == contacts$fullTRA) # FALSE, but I can't find anything wrong
+
+all(contacts$TRA_CDR1 == contacts$tra.CDR1) # FALSE
+all(contacts$TRA_CDR2 == contacts$tra.CDR2) # FALSE
+
+## add IMGT details to specificity
+
+spec3 = spec[c("peptide_specificity", "cloneID", "junction_alpha", "junction_beta", "traLen", "trbLen", "PITmatch", "tra.fiveJ", "trb.fiveJ")]
+
+spec3$fullTRA = imgtA$V.J.REGION[match(spec3$junction_alpha, imgtA$JUNCTION)]
+
+## repair faulty sequence- chose non-representative full nt sequence from TCRsfull
+spec3[13, "fullTRA"] <- contacts[10, "fullTRA"]
+
+spec3$fullTRB = imgtB$V.D.J.REGION[match(spec3$junction_beta, imgtB$JUNCTION)]
+
+spec3$tra.CDR1 = imgtA$CDR1.IMGT[match(spec3$junction_alpha, imgtA$JUNCTION)]
+spec3$tra.CDR2 = imgtA$CDR2.IMGT[match(spec3$junction_alpha, imgtA$JUNCTION)]
+spec3$tra.CDR3 = imgtA$CDR3.IMGT[match(spec3$junction_alpha, imgtA$JUNCTION)]
+
+spec3$trb.CDR1 = imgtB$CDR1.IMGT[match(spec3$junction_beta, imgtB$JUNCTION)]
+spec3$trb.CDR2 = imgtB$CDR2.IMGT[match(spec3$junction_beta, imgtB$JUNCTION)]
+spec3$trb.CDR3 = imgtB$CDR3.IMGT[match(spec3$junction_beta, imgtB$JUNCTION)]
+
+spec3$completed = spec3$cloneID %in% contacts$CloneID
+spec3$pepSeq = peps$Sequence[match(spec3$peptide_specificity, peps$pepConcat)]
+
+############################
+## count contacts in all models
+
+spec4 = na.omit(spec3)
+spec4$modelID = spec4$cloneID
+spec4$modelID  = gsub("Clone", "clone", spec4$modelID)
+spec4$modelID = paste0(spec4$modelID, "_ranked_0.pdb")
+spec4$modelID = paste0("known_", spec4$modelID)
+
+setdiff(contacts$CloneID, specSub$cloneID)  # only Clone_855 which was split into two becasue it has two TRA chains (Clone_855A, Clone_855B)
+#[1] "Clone_855A" "Clone_855B"
+
+#############NEED FROM HERE
+
+
+## check files
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/")
+
+model_files <- list.files("models")
+
+#Check to make sure the word "model" appears in the name of each file
+model_files <- model_files[str_detect(model_files, "ranked")]
+
+intersect(model_files, spec4$modelID) # 28/28 model files
+setdiff(model_files, spec4$modelID) # 0
+setdiff(spec4$modelID, model_files) # 0
+
+#Add the model directory structure to the file names
+model_files <- paste0("models/", model_files)
+
+#Read in all counts files as a list
+models <- lapply(model_files, function(x) read.csv(x, row.names = 1))
+
+pdb_files <- list.files("models")
+
+#Check to make sure the word "ranked" appears in the name of each file
+pdb_files <- pdb_files[str_detect(pdb_files, "ranked_0")]
+
+#pdb_files <- pdb_files[! pdb_files %in% c("c1662_ranked_0.pdb")] # remove model that doesn't work
+
+#Add the counts directory structure to the file names
+#pdb_files <- paste0("PIT_matched_IAR_TCRs/", pdb_files) # 28/28
+
+spec4 = spec4[order(spec4$modelID),]
+pdb_files = subset(pdb_files, pdb_files %in% spec4$modelID)
+#pdb_files = subset(pdb_files, pdb_files %in% spec4$modelID[1:10])
+
+## set distance cut
+
+dist = c(5) # contact distances
+
+	for(j in 1:length(dist)){
+	cut = dist[j]
+
+	xnames = unique(pdb_files) # full set
+	#xnames = c("c109_ranked_0.pdb",  "c110_ranked_0.pdb",  "c140_ranked_0.pdb", "c1826_ranked_0.pdb") # test set
+	ncx = length(xnames)
+
+	## test for order
+	all(xnames == pdb_files)
+	#[1] TRUE
+
+	## make blank data frames for tabulating results
+	DF1A = data.frame(matrix(nrow = 0, ncol = 10))
+	DF2A = data.frame(matrix(nrow = 0, ncol = 6))	
+	DF1B = data.frame(matrix(nrow = 0, ncol = 10))
+	DF2B = data.frame(matrix(nrow = 0, ncol = 6))
+
+## loop for counting contacts per region	
+	for(i in 1:ncx){	
+	
+	## load single pdb file
+    setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/models")
+	
+	q = pdb_files[[i]]
+	pdb = read.pdb(pdb_files[[i]], rm.insert = T)
+	
+	## Select chains and trim pdb
+	
+	seleA <- atom.select(pdb, chain="A")
+	seleB <- atom.select(pdb, chain="B")
+	seleC <- atom.select(pdb, chain="C")
+	seleD <- atom.select(pdb, chain="D")
+	seleE <- atom.select(pdb, chain="E")
+	
+	pdbA <- trim.pdb(pdb, inds=seleA)
+	pdbB <- trim.pdb(pdb, inds=seleB)
+	pdbC <- trim.pdb(pdb, inds=seleC)
+	pdbD <- trim.pdb(pdb, inds=seleD)
+	pdbE <- trim.pdb(pdb, inds=seleE)
+	
+	seleA = clean.pdb(pdbA, consecutive = F, force.renumber = T,
+		  	fix.chain = T, fix.aa = FALSE, rm.wat = T, rm.lig = FALSE,
+			 rm.h = FALSE, verbose = FALSE)
+			 
+	seleB = clean.pdb(pdbB, consecutive = F, force.renumber = T,
+		  	fix.chain = T, fix.aa = FALSE, rm.wat = T, rm.lig = FALSE,
+			 rm.h = FALSE, verbose = FALSE)
+	
+	seleC = clean.pdb(pdbC, consecutive = F, force.renumber = T,
+		  	fix.chain = T, fix.aa = FALSE, rm.wat = T, rm.lig = FALSE,
+			 rm.h = FALSE, verbose = FALSE)
+	
+	seleD = clean.pdb(pdbD, consecutive = F, force.renumber = T,
+		  	fix.chain = T, fix.aa = FALSE, rm.wat = T, rm.lig = FALSE,
+			 rm.h = FALSE, verbose = FALSE)
+			 
+	seleE = clean.pdb(pdbE, consecutive = F, force.renumber = T,
+		  	fix.chain = T, fix.aa = FALSE, rm.wat = T, rm.lig = FALSE,
+			 rm.h = FALSE, verbose = FALSE)
+					
+	## start with TRA chain, chain D with web site, chain A with standalone version
+	#NB, for some reason, the chain IDs used by molstar are ABCDE (TRA, TRB, pep, MHCa, MHCb). bio3D uses ABCDE differently (MHCa, MHCb, pep, TRA, TRB).
+
+	## determine contaact residues
+	bsA <- binding.site(a = pdbA, b = pdbC, cutoff = cut, hydrogens=F, byres = F)
+
+	resultA = data.frame(strsplit2(bsA$resnames, " "))
+	colnames(resultA) = c("aa3", "res", "chain")
+	resultA$aa1 = aa321(resultA$aa3)
+	resultA$chain = gsub("\\(", "", resultA$chain)
+	resultA$chain = gsub("\\)", "", resultA$chain)
+	resultA$pdb = c(q)
+	resultA$res = as.numeric(resultA$res)
+	
+	## make new index for pdb residues because they don't match a linear sequence
+	
+	chainA = atom.select(seleA, "protein", chain = "A", elety="CB")
+	chainA = pdbseq(pdbA, inds = chainA$atom, aa1 = TRUE)
+	chainA = pdbseq(pdbA, aa1 = TRUE)
+	
+	keyA = data.frame(residue = chainA[], old = as.numeric(names(chainA)), new = seq(from = 1, to = length(chainA), by = 1))
+	
+	#resultA$newRes = keyA$new[match(resultA$res, keyA$old)]
+	
+	## look for matching in CDR regions with original coordinates 
+	
+	subSpec1 = subset(spec4, modelID == q)
+	
+	## extract contact residues by loop
+	
+	mapCDR1A = gregexpr(subSpec1$tra.CDR1, subSpec1$fullTRA) # map region to complete sequence 
+	startNew = mapCDR1A[[1]][1]
+	startOld = keyA$old[match(startNew, keyA$new)]
+	len = as.numeric(unlist(attributes(mapCDR1A[[1]]))[1])
+	keyAsub = subset(keyA, keyA$old >= startOld) # subset key to begin with first mapped residue
+	keyAsub = head(keyAsub, len) # subset key to end with last mapped residue
+	resultA$traCDR1 = ifelse(bsA$resno %in% keyAsub$old, 1, 0) # code residues in truuncated key sequences
+	
+	mapCDR2A = gregexpr(subSpec1$tra.CDR2, subSpec1$fullTRA)
+	startNew = mapCDR2A[[1]][1]
+	startOld = keyA$old[match(startNew, keyA$new)]
+	len = as.numeric(unlist(attributes(mapCDR2A[[1]]))[1])
+	keyAsub = subset(keyA, keyA$old >= startOld)
+	keyAsub = head(keyAsub, len)
+	resultA$traCDR2 = ifelse(bsA$resno %in% keyAsub$old, 1, 0)
+	
+	mapCDR3A = gregexpr(subSpec1$tra.CDR3, subSpec1$fullTRA)
+	startNew = mapCDR3A[[1]][1]
+	startOld = keyA$old[match(startNew, keyA$new)]
+	len = as.numeric(unlist(attributes(mapCDR3A[[1]]))[1])
+	keyAsub = subset(keyA, keyA$old >= startOld)
+	keyAsub = head(keyAsub, len)
+	resultA$traCDR3 = ifelse(bsA$resno %in% keyAsub$old, 1, 0)
+	
+	map5JA = gregexpr(subSpec1$tra.fiveJ, subSpec1$fullTRA)
+	startNew = map5JA[[1]][1]
+	startOld = keyA$old[match(startNew, keyA$new)]
+	len = as.numeric(unlist(attributes(map5JA[[1]]))[1])
+	keyAsub = subset(keyA, keyA$old >= startOld)
+	keyAsub = head(keyAsub, len)
+	resultA$map5JA = ifelse(bsA$resno %in% keyAsub$old, 1, 0)
+	
+	resultA$traOther = ifelse(resultA$traCDR1 == 0 & resultA$traCDR2 == 0 & resultA$traCDR3 == 0, 1, 0)
+	
+	resultA$modelID = c(q)
+	
+	summaryA = c(unique(resultA$modelID), c("TRA"), sum(resultA$traCDR1), sum(resultA$traCDR2), sum(resultA$traCDR3), sum(resultA$map5JA), sum(resultA$traOther))
+		
+	## then go to TRB chain, chain B
+	#NB, for some reason, the chain IDs used by molstar are BBCDE (TRB, TRB, pep, MHCa, MHCb). bio3D uses BBCDE differently (MHCa, MHCb, pep, TRB, TRB).
+
+    ## determine coontact residues
+	bsB <- binding.site(a = pdbB, b = pdbC, cutoff = cut, hydrogens=F, byres = F)
+
+	resultB = data.frame(strsplit2(bsB$resnames, " "))
+	colnames(resultB) = c("aa3", "res", "chain")
+	resultB$aa1 = aa321(resultB$aa3)
+	resultB$chain = gsub("\\(", "", resultB$chain)
+	resultB$chain = gsub("\\)", "", resultB$chain)
+	resultB$pdb = c(q)
+	resultB$res = as.numeric(resultB$res)
+	
+	## make new index for pdb residues because they don't match a linear sequence
+	
+	chainB = atom.select(seleB, "protein", chain = "B", elety="CB")
+	chainB = pdbseq(pdbB, inds = chainB$atom, aa1 = TRUE)
+	chainB = pdbseq(pdbB, aa1 = TRUE)
+	
+	keyB = data.frame(residue = chainB[], old = as.numeric(names(chainB)), new = seq(from = 1, to = length(chainB), by = 1))
+	
+	#resultB$newRes = keyA$new[match(resultB$res, keyB$old)]
+	
+	## look for matching in original CDR regions, then change coordinates to new coordinates
+	
+	subSpec1 = subset(spec4, modelID == q)
+	
+	## extract contact residues by loop
+	
+	mapCDR1B = gregexpr(subSpec1$trb.CDR1, subSpec1$fullTRB)
+	startNew = mapCDR1B[[1]][1]
+	startOld = keyB$old[match(startNew, keyB$new)]
+	len = as.numeric(unlist(attributes(mapCDR1B[[1]]))[1])
+	keyBsub = subset(keyB, keyB$old >= startOld)
+	keyBsub = head(keyBsub, len)
+	resultB$trbCDR1 = ifelse(bsB$resno %in% keyBsub$old, 1, 0)
+	
+	mapCDR2B = gregexpr(subSpec1$trb.CDR2, subSpec1$fullTRB)
+	startNew = mapCDR2B[[1]][1]
+	startOld = keyB$old[match(startNew, keyB$new)]
+	len = as.numeric(unlist(attributes(mapCDR2B[[1]]))[1])
+	keyBsub = subset(keyB, keyB$old >= startOld)
+	keyBsub = head(keyBsub, len)
+	resultB$trbCDR2 = ifelse(bsB$resno %in% keyBsub$old, 1, 0)
+	
+	mapCDR3B = gregexpr(subSpec1$trb.CDR3, subSpec1$fullTRB)
+	startNew = mapCDR3B[[1]][1]
+	startOld = keyB$old[match(startNew, keyB$new)]
+	len = as.numeric(unlist(attributes(mapCDR3B[[1]]))[1])
+	keyBsub = subset(keyB, keyB$old >= startOld)
+	keyBsub = head(keyBsub, len)
+	resultB$trbCDR3 = ifelse(bsB$resno %in% keyBsub$old, 1, 0)
+	
+	map5JB = gregexpr(subSpec1$trb.fiveJ, subSpec1$fullTRB)
+	startNew = map5JB[[1]][1]
+	startOld = keyB$old[match(startNew, keyB$new)]
+	len = as.numeric(unlist(attributes(map5JB[[1]]))[1])
+	keyBsub = subset(keyB, keyB$old >= startOld)
+	keyBsub = head(keyBsub, len)
+	resultB$map5JB = ifelse(bsB$resno %in% keyBsub$old, 1, 0)
+	
+	resultB$trbOther = ifelse(resultB$trbCDR1 == 0 & resultB$trbCDR2 == 0 & resultB$trbCDR3 == 0, 1, 0)
+	
+	resultB$modelID = c(q)
+	
+	summaryB = c(unique(resultB$modelID), c("TRB"), sum(resultB$trbCDR1), sum(resultB$trbCDR2), sum(resultB$trbCDR3), sum(resultB$map5JB), sum(resultB$trbOther))
+
+	## concatenate results  -for all models
+	
+	DF1A = rbind(DF1A, resultA)
+	DF2A = rbind(DF2A, summaryA)
+	
+	DF1B = rbind(DF1B, resultB)
+	DF2B = rbind(DF2B, summaryB)
+	}
+
+colnames(DF2A) = c("pdbFile","chain", "contactsCDR1", "contactsCDR2", "contactsCDR3", "contacts5J", "contactsOther")
+colnames(DF2B) = c("pdbFile","chain", "contactsCDR1", "contactsCDR2", "contactsCDR3", "contacts5J", "contactsOther")
+
+toSave = rbind(DF2A, DF2B)
+
+setwd("/Users/peterlinsley/Dropbox/RNAseq/PIT_matched_IAR_TCRs")
+filename = paste("compiled_PIT_matched_TCR_peptide_contacts_bio3D_with_5J_091923", cut, "A.csv", sep = "_")
+#write.csv(toSave, filename)
+}
+
+## test load
+setwd("/Users/peterlinsley/Dropbox/RNAseq/PIT_matched_IAR_TCRs")
+temp = read.csv("compiled_PIT_matched_TCR_peptide_contacts_bio3D_082923.csv", stringsAsFactors = F)

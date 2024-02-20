@@ -1,0 +1,316 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(gdata)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load matches
+
+levIAR1 = read.csv("/Users/peterlinsley/Dropbox/RNAseq/Maki_Nakayama/Levenshtein_coefficients_IAR_cells/Levenshtein_index_IAR_w_islets/Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+filename = ("Levenshtein_index_P324_P474_IAR_CD4_with_islet_TCRS_lv.lt6.csv")
+
+levIAR2 = read.csv(filename, stringsAsFactors = F)
+
+levSubIAR1 = subset(levIAR1, levIAR1$lv <2); nrow(levSubIAR1) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+levSubIAR2 = subset(levIAR2, levIAR2$lv <2); nrow(levSubIAR2) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+
+## load IAR1 TCRs
+
+IAR1Tcrs = read.csv("/Users/peterlinsley/Dropbox/RNAseq/P91_Karen_Junbao/12012020_new_cloneIds/201512_TCR_MasterList_w_CloneIDs.csv", stringsAsFactors = F) # 5729
+colnames(IAR1Tcrs) = gsub("tcrGraph_sharing_level", "sharing_level", colnames(IAR1Tcrs))
+
+IAR1Tcrs = data.frame(IAR1Tcrs, set = "IAR1")
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames)]
+IAR1Tcrs$study_group = gsub("early onset T1D", "newT1D", IAR1Tcrs$study_group)
+
+## add HLA
+hla = readxl::read_excel("subject_char_w_HLA.xlsx")
+
+## correct donor id
+
+hla$'Subject ID' = gsub('TID', "T1D", hla$'Subject ID')
+
+## load ID key
+
+idKey = readxl::read_excel("P91_P168 Sample_ID_key.xlsx")
+
+idKey$tcrId = gsub("HC10, Ctrl10", "CTRL10", idKey$tcrId)
+
+## remove whitespace
+
+hla$'Subject ID' = stringr::str_trim(hla$'Subject ID')
+idKey$suppTabId = stringr::str_trim(idKey$suppTabId)
+IAR1Tcrs$donor_id = stringr::str_trim(IAR1Tcrs$donor_id)
+
+## add suppTabId and then match HLA
+
+IAR1Tcrs$suppTabId = idKey$suppTabId[match(IAR1Tcrs$donor_id, idKey$tcrId)]
+IAR1Tcrs$hla = hla$DRB1[match(IAR1Tcrs$suppTabId, hla$"Subject ID")]
+
+## check to see that HLA is present for most donos
+
+temp = subset(IAR1Tcrs, is.na(IAR1Tcrs$hla)) # 0/5417. 
+unique(temp$donor_id) #0
+
+tempa = subset(hla, hla$"Subject ID" == "CTRL10")
+tempb = subset(IAR1Tcrs, IAR1Tcrs$donor_id == "CTRL10")
+
+tempa$'Subject ID'
+unique(tempb$donor_id)
+
+colNames1 = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames1)]
+
+## load IAR2 TCRs
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+#test2$study_group2 = ifelse(test2$study_group %in% c("1AAb", "2AAb"), "AAbPos", 
+#						ifelse(test2$study_group %in% c("newT1D"), "newT1D", 
+#						ifelse(test2$study_group %in% c("AAbNeg"), "HC", "other")))
+#test2$study_group = test2$study_group2
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)]
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## subset tcrsComb by HLA-DRB1*04 if desired
+
+tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 855 E junctions, 135 unique
+libs = E$libid
+E.cell = subset(tcrsComb, tcrsComb$libid %in% libs) # 956
+
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+#   267      8     21     31    119    510 
+   
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 956 TRUE 2670 FALSE for junctions; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 12
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 29
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 3548
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 2967
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 1512
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 1433
+
+## modify data
+
+tcrsCombSub3$PITmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 640 T, 2908 F
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3Tra = subset(tcrsCombSub3, tcrsCombSub3$chainType == "TRA") # 1814
+tcrsCombSub3Tra.u = tcrsCombSub3Tra[!duplicated(tcrsCombSub3Tra$junction),] # 1512
+
+tcrsCombSub3Tra$studyGroup = gsub("AAbNeg", "HC", tcrsCombSub3Tra$studyGroup)
+tcrsCombSub3Tra$studyGroup = gsub("1AAb", "AAb+", tcrsCombSub3Tra$studyGroup)
+tcrsCombSub3Tra$studyGroup = gsub("2AAb", "AAb+", tcrsCombSub3Tra$studyGroup)
+
+toPlot = tcrsCombSub3Tra # 1814 after HLA subsetting
+toPlot$PITmatch = gsub("TRUE", "PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE", "non-PIT-matched", toPlot$PITmatch)
+
+## subset to expanded TCRs or not. 
+
+toPlot1 = subset(toPlot, expanded == "E") # 467 or 26%
+toPlot2 = subset(toPlot, expanded == "NE") # 1347 or 74%
+
+## summarize no.junctions per study group, PIT match and E
+
+df1 = ddply(toPlot1,.(studyGroup), plyr::summarize, no. = length(junction))#
+df2 = ddply(toPlot2,.(studyGroup), plyr::summarize, no. = length(junction))#
+
+df1 # all E cells
+#  studyGroup no.
+#1       1AAb  12
+#2       2AAb  15
+#3         HC 145
+#4     newT1D  55
+#5        T1D 240
+
+df2 # all NE cells
+#  studyGroup no.
+#1       1AAb 219
+#2       2AAb  65
+#3         HC 297
+#4     newT1D 335
+#5        T1D 431
+
+df1 = ddply(toPlot1,.(studyGroup, PITmatch), plyr::summarize, no. = length(junction))#
+#df1$studyGroup = factor(df1$studyGroup, levels = c("HC", "1AAb", "2AAb", "newT1D", "T1D"))
+df1$studyGroup = factor(df1$studyGroup, levels = c("HC", "AAb+", "newT1D", "T1D"))
+
+sizeExpand1 = ddply(df1,.(studyGroup), plyr::summarize, sum = sum(no.)) # same as original df1
+
+df1$tot = sizeExpand1$sum[match(df1$studyGroup, sizeExpand1$studyGroup)]
+df1$freq = df1$no./df1$tot
+df1$E = c("Expanded")
+
+df2 = ddply(toPlot2,.(studyGroup, PITmatch), plyr::summarize, no. = length(junction))#
+#df2$studyGroup = factor(df2$studyGroup, levels = c("HC", "1AAb", "2AAb", "newT1D", "T1D"))
+df2$studyGroup = factor(df2$studyGroup, levels = c("HC", "AAb+", "newT1D", "T1D"))
+
+sizeExpand1 = ddply(df2,.(studyGroup), plyr::summarize, sum = sum(no.)) # same as original df2
+
+df2$tot = sizeExpand1$sum[match(df2$studyGroup, sizeExpand1$studyGroup)]
+df2$freq = df2$no./df2$tot
+df2$E = c("non-Expanded")
+
+df3 = rbind(df1, df2)
+
+## bar plots 
+
+if(dev.cur() >1) dev.off()
+quartz(height = 8, width = 14, dpi =72);
+## set defaults
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df3, aes(x = studyGroup, y = freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + facet_wrap(~E)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+
+
+xlab = "\nGroup"
+ylab = "PIT matches, \nfraction TRA junctions\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + scale_y_continuous(limits = c(0, 1.20), breaks = c(0, 0.25, 0.5, 0.75, 1.0))
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = "Fig1K_frxn_PIT_matches_by_jdisease_group_facet_expanded_cells.pdf"
+
+ggsave(filename, p)
+
+## tally donors per study group
+
+noDonorPerStudyGroup = ddply(toPlot1,.(PITmatch, studyGroup), plyr::summarize, no. = length(unique(donor_id)))#
+noDonorPerStudyGroup = ddply(toPlot1,.(studyGroup), plyr::summarize, no. = length(unique(donor_id)))#
+
+## tests
+
+df3 = df1
+
+var1T = subset(df3, studyGroup == "HC")
+var2T = subset(df3, studyGroup == "AAb+")
+var3T = subset(df3, studyGroup == "newT1D")
+var4T = subset(df3, studyGroup == "T1D")
+
+a = c(var1T[,3]) #HC
+b = c(var2T[,3]) #AAb+
+c = c(var3T[,3]) #newT1D
+d = c(var4T[,3]) #T1D
+
+test1 = fisher.test(rbind(a,b)); test1$p.value # 0.08332905
+test2 = fisher.test(rbind(a,c)); test2$p.value # 0.02476243
+test3 = fisher.test(rbind(a,d)); test3$p.value # 0.6145677
+test5 = fisher.test(rbind(b,c)); test5$p.value # 0.5917668
+test6 = fisher.test(rbind(b,d)); test6$p.value # 0.1419553
+test8 = fisher.test(rbind(c,d)); test8$p.value # 0.03118679
+
+## adjust by test p-values for muiltiple testing
+
+result = c(test1$p.value, test2$p.value, test3$p.value, test5$p.value, test6$p.value, test8$p.value)
+p.adjust(result)
+
+# none are significant after multiple testing
+
+## tests
+
+df3 = df2 # non-expanded
+
+var1T = subset(df3, studyGroup == "HC")
+var2T = subset(df3, studyGroup == "AAb+")
+var3T = subset(df3, studyGroup == "newT1D")
+var4T = subset(df3, studyGroup == "T1D")
+
+a = c(var1T[,3]) #HC
+b = c(var2T[,3]) #AAb+
+c = c(var3T[,3]) #newT1D
+d = c(var4T[,3]) #T1D
+
+test1 = fisher.test(rbind(a,b)); test1$p.value # 0.1615882
+test2 = fisher.test(rbind(a,c)); test2$p.value # 9.725188e-09
+test3 = fisher.test(rbind(a,d)); test3$p.value # 0.2481896
+test5 = fisher.test(rbind(b,c)); test5$p.value # 0.000146862
+test6 = fisher.test(rbind(b,d)); test6$p.value # 0.6923682
+test8 = fisher.test(rbind(c,d)); test8$p.value # 1.091219e-07
+
+## adjust by test p-values for muiltiple testing
+
+result = c(test1$p.value, test2$p.value, test3$p.value, test5$p.value, test6$p.value, test8$p.value)
+p.adjust(result)
+
+p.adjust(result)
+#[1] 4.847647e-01 5.835113e-08 4.963792e-01 5.874482e-04 6.923682e-01 5.456097e-07
+
+#or c("NS", "****", "NS", "***", "NS", "****")
+
+
+
+

@@ -1,0 +1,97 @@
+rm(list = ls())
+library(plyr)
+library(edgeR)
+library(compareGroups)
+library(dbscan)
+library(MAST)
+library(ggsignif)
+library(monocle3)
+library(dplyr)
+library(geosphere)
+library(RColorBrewer)
+library(gtools)
+library(psych)
+library(gdata)
+library(ggplot2); library(reshape2); theme_set(theme_bw(26) + theme(panel.grid.major = element_blank(), 
+                                                 panel.grid.minor = element_blank()) +
+                              theme(legend.key = element_blank()))
+update_geom_defaults("point", aes(size = 4))
+
+##################
+## TCR CDR peptide contacts- all 
+
+## Prepare and load data file
+## Use all PIT-matched IAR1 TCRs with known specificity. Construct models using TCRmodel (https://tcrmodel.ibbr.umd.edu/). Assumed ##same peptide bound as by the exmplar with known specificity. View models in Mol* viewer (https://molstar.org/viewer/). Select peptide chain, the select residues, followed by Manipulate Selection, Surrounding Residues 5A of selection. Record number of residues highlighted for each chain in sequence viewer- repeat counts at least twice or until getting a consensus result. Identify CDR1, CDR2, CDR3 and other regions using IMGT. Manually tabulate results in CDR regions. Verify results by checking at least twice.
+
+## load tabulated and annotated Structural results. 
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data/")
+
+contacts = read.delim("PIT_matched_TCRs_w_chain_seqs_manual_All_080123.txt")
+
+contacts$traR13 = contacts$chain1.cdr1/contacts$chain.1.cdr3
+contacts$trbR13 = contacts$chain2.cdr1/contacts$chain.2.cdr3
+
+mCont = melt(contacts, measure.vars = c("chain1.cdr1",	"chain.1.cdr2", "chain.1.cdr3", "chain2.cdr1",	"chain.2.cdr2",	"chain.2.cdr3", "otherTRA",	"otherTRB"))
+
+colnames(mCont) = gsub("value","contacts", colnames(mCont))
+mCont$variable = gsub("chain1.cdr1","TraCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.1.cdr1","TraCDR2", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.1.cdr2","TraCDR2", mCont$variable, fixed = T)
+
+mCont$variable = gsub("chain2.cdr1","TrbCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr1","TrbCDR1", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr2","TrbCDR2", mCont$variable, fixed = T)
+mCont$variable = gsub("chain.2.cdr3","TrbCDR3", mCont$variable, fixed = T)
+mCont$variable = gsub("otherTRA","TraOther", mCont$variable, fixed = T)
+mCont$variable = gsub("otherTRB","TrbOther", mCont$variable, fixed = T)
+
+mCont$variable = gsub("chain.1.cdr3","TraCDR3", mCont$variable, fixed = T)
+
+#mCont$variable = factor(mCont$variable, levels = )
+mCont$chain = ifelse(mCont$variable %in% grep("Tra", mCont$variable, value = T), "TRA", 
+				ifelse(mCont$variable %in% grep("Trb", mCont$variable, value = T), "TRB","other"))
+
+toPlot2 = subset(mCont, !variable %in% grep("other", mCont$variable, value = T))
+toPlot2 = subset(toPlot2, !variable %in% grep("cdr2", mCont$variable, value = T))
+toPlot2 = na.omit(toPlot2)
+
+###################
+## calculate and plot total contacts per chain
+
+totCont = ddply(mCont,.(CloneID, PITmatch, chain), plyr::summarize, sum = sum(contacts))
+totCont = na.omit(totCont)
+
+if(dev.cur()>1)dev.off()
+quartz(width=14,height=8, dpi=72)  ### open plotting window
+
+theme_set(theme_bw(30) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+update_geom_defaults("point", aes(size = 1))
+update_geom_defaults("density2d", aes(size = 4))
+
+#pal = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffed6f','#b15928', "gray")	
+pal = c("#1b9e77", "#d95f02", "#7570b3")
+#pal = c("#d3d3d3", "#1b9e77", "other") # all dots gray palette
+
+ggplot(totCont, aes( y = sum, x = PITmatch)) + geom_violin(draw_quantiles = c(0.5), stat = "ydensity", position = "dodge", fill = "#8da0cb", lwd = 1.5) 
+last_plot() + facet_wrap(~chain, scales = "fixed", nrow = 1)
+last_plot() + geom_dotplot(data = totCont, aes(x = PITmatch, y = sum), position = "identity", method = "histodot", binaxis = "y", stackdir = "center", dotsize = 0.75, colour = "black") 
+
+ymax = max(totCont$sum)
+ymin = min(totCont$sum)
+last_plot() + scale_y_continuous(limits = c(ymin, ymax + 2))
+last_plot() + scale_y_continuous(limits = c(ymin, ymax))
+
+#last_plot() + geom_signif(comparisons = list(c("FALSE", "TRUE")), textsize = 8, y_position = ymax, map_signif_level = T, test = "wilcox.test", test.args=list(alternative = "two.sided", var.equal = T, paired=F))
+
+ylab = "No. TCR-peptide contacts\n"
+xlab = "\nPITmatch"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + scale_y_continuous(limits = c(0, 13), breaks = c(0, 5, 10))
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = "Fig_3C_All_predicted_TCR_peptide_contacts.pdf"
+ggsave(filename, p)
+
+

@@ -1,0 +1,340 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(readxl)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load matches
+
+levIAR1 = read.csv("Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+filename = ("Levenshtein_index_P324_P474_IAR_CD4_with_islet_TCRS_lv.lt6.csv")
+
+levIAR2 = read.csv(filename, stringsAsFactors = F)
+
+levSubIAR1 = subset(levIAR1, levIAR1$lv <2); nrow(levSubIAR1) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+levSubIAR2 = subset(levIAR2, levIAR2$lv <2); nrow(levSubIAR2) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+
+## load IAR1 TCRs
+
+IAR1Tcrs = read.csv("201512_TCR_MasterList_w_CloneIDs.csv", stringsAsFactors = F) # 5417
+colnames(IAR1Tcrs) = gsub("tcrGraph_sharing_level", "sharing_level", colnames(IAR1Tcrs))
+
+IAR1Tcrs = data.frame(IAR1Tcrs, set = "IAR1")
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames)]
+IAR1Tcrs$study_group = gsub("early onset T1D", "newT1D", IAR1Tcrs$study_group)
+
+## create IAR1 hla
+
+hla = read_excel("subject_char_w_HLA.xlsx")
+
+## correct donor id
+
+hla$'Subject ID' = gsub('TID', "T1D", hla$'Subject ID')
+
+## load ID key
+
+idKey = read_excel("P91_P168 Sample_ID_key.xlsx")
+
+idKey$tcrId = gsub("HC10, Ctrl10", "CTRL10", idKey$tcrId)
+
+## remove whitespace
+
+hla$'Subject ID' = stringr::str_trim(hla$'Subject ID')
+idKey$suppTabId = stringr::str_trim(idKey$suppTabId)
+IAR1Tcrs$donor_id = stringr::str_trim(IAR1Tcrs$donor_id)
+
+## add suppTabId and then match HLA
+
+IAR1Tcrs$suppTabId = idKey$suppTabId[match(IAR1Tcrs$donor_id, idKey$tcrId)]
+IAR1Tcrs$hla = hla$DRB1[match(IAR1Tcrs$suppTabId, hla$"Subject ID")]
+
+## check to see that HLA is present for most donors
+
+temp = subset(IAR1Tcrs, is.na(IAR1Tcrs$hla)) # 0/5417. 
+unique(temp$donor_id) #0
+
+tempa = subset(hla, hla$"Subject ID" == "CTRL10")
+tempb = subset(IAR1Tcrs, IAR1Tcrs$donor_id == "CTRL10")
+
+tempa$'Subject ID'
+unique(tempb$donor_id)
+
+colNames1 = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames1)] # 5417
+
+## load IAR2 TCRs
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)]
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_code")
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## save tcrsComb as Supplemental Table for manuscript
+
+toSave = tcrsComb
+toSave$set = gsub("IAR1", "Cohort1", toSave$set)
+toSave$set = gsub("IAR2", "Cohort2", toSave$set)
+table(toSave$set )
+
+#setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+#filename = "Table_S4_Compiled_and_filtered_TCR_sequences_used_in_this_study.csv"
+#write.csv(toSave, filename)
+
+## subset tcrsComb by HLA, if desired
+
+#tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # 6529 junctions, sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 855 E junctions, 135 unique
+libs = E$libid
+E.cell = subset(tcrsComb, tcrsComb$libid %in% libs) # 956
+
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+# 284     23     56    101    812    678 # all tcrs, not subsetted
+#   267      8     21     31    119    510 # hla  "04" subset
+   
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 1954 TRUE 5773 FALSE for junctions; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 18
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 45
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 7633
+
+## modify combined TCRs
+
+tcrsCombSub3$PITmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3Tra = subset(tcrsCombSub3, tcrsCombSub3$chainType == "TRA") # 3907
+tcrsCombSub3Tra.u = tcrsCombSub3Tra[!duplicated(tcrsCombSub3Tra$junction),] # 3264
+6487
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 3264
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 3187
+
+tcrsCombSub3Tra$studyGroup = gsub("AAbNeg", "HC", tcrsCombSub3Tra$studyGroup)
+
+## determine junction sharing
+
+no =  ddply(tcrsCombSub3,.(junction), plyr::summarize, sum = length(donor_id)) # 6529 junctions, sum(no$sum) = 7727
+
+shared = subset(no, sum>1)# 462
+sum(shared$sum) # 1614
+
+tcrsCombSub3$sharing = ifelse(tcrsCombSub3$junction %in% shared$junction, "public",
+							ifelse(!tcrsCombSub3$junction %in% shared$junction, "private", "other"))
+
+a = subset(tcrsCombSub3, chainType == "TRA") # 3907
+b = subset(tcrsCombSub3, chainType == "TRB")
+
+
+df = table(a$sharing, a$PITmatch)
+df
+         
+#          FALSE TRUE
+#  private  2177  819
+#  public    495  416
+
+fisher.test(df)
+
+## make stacked bargraph
+
+toPlot = melt(df)
+
+tot = data.frame(melt(table(a$sharing)))
+
+toPlot$tot = tot$value[match(toPlot$Var1, tot$Var1)]
+toPlot$freq = toPlot$value/toPlot$tot 
+
+colnames(toPlot)[1] = c("sharing")
+colnames(toPlot)[2] = c("PITmatch")
+toPlot$PITmatch = gsub("TRUE","PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE","non-PIT-matched", toPlot$PITmatch)
+
+## make plot
+
+if(dev.cur() >1) dev.off()
+quartz(height = 8, width = 12, dpi =72);
+## set defaults
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = sharing, y = freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+#last_plot() + facet_wrap(~E)
+
+xlab = "\nTRA class"
+ylab = "PIT matches, \nfraction TRA class\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + scale_y_continuous(limits = c(0, 1.20), breaks = c(0, 0.25, 0.5, 0.75, 1.0))
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/")
+filename = "PIT_matches_by_public_or_private.pdf"
+
+ggsave(filename, p)
+
+## hypergeometric p-values
+
+aUniv = length(unique(a$junction))# 3264
+a.u = a[!duplicated(a$junction),] # 3264
+
+aPub = subset(a.u, sharing == "public") # 268
+aPriv = subset(a.u, sharing == "private") # 2996
+aPrivS = subset(a.u, a.u$junction %in% sample(a.u$junction, size = length(aPub$junction)))
+
+aPitT = subset(a.u, PITmatch == "TRUE") # 942
+aPITF = subset(a.u, PITmatch == "FALSE") # 2322
+
+lenApub = length(aPub$junction) # 268
+lenApriv = length(aPriv$junction) # 2996
+lenAprivS = length(aPrivS$junction) # 268
+
+lenApitT = length(aPitT$junction) # 942
+
+pubI = length(intersect(aPub$junction, aPitT$junction)) # 128
+privI = length(intersect(aPriv$junction, aPitT$junction)) # 819
+privIs = length(intersect(aPrivS$junction, aPitT$junction)) # 75.2 (mean of 10 determinations)
+
+phyper(pubI, lenApub, aUniv-lenApub, lenApitT, lower.tail = F) # 2.1e-10
+phyper(privI, lenApriv, aUniv-lenApriv, lenApitT, lower.tail = F) # 1
+phyper(privIs, lenAprivS, aUniv-lenAprivS, lenApitT, lower.tail = F) # 0.70
+
+phyper(123, 268, 3264-268, 942, lower.tail = F) # 2.1e-10
+phyper(819, 2996, 3264-2996, 942, lower.tail = F) # 1
+phyper(73, 268, 3264-268, 942, lower.tail = F) # 0.70
+
+#######Venn diagrams
+
+library(VennDiagram)
+library(ggplot2)
+
+## public
+if(dev.cur() >1) dev.off()
+quartz(height = 10, width = 10, dpi =72);
+theme_set(theme_bw(24) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("errorbar", aes(size = 2))
+update_geom_defaults("point", aes(size = 8))
+theme_update(plot.title = element_text(hjust = 0.5))
+
+A = "Public TRA"
+B = "PIT-matched junctions"
+
+#A = paste("islet", "\nintersect", "AgSp", sep = " ")
+#B = paste("islet", "\nintersect", "Shingrix", sep = " ")
+
+venn.plot <- draw.pairwise.venn(
+  area1 = 268,
+  area2 = 942,
+  cross.area = 123,
+  category = c(A, B),
+  fill = c("mediumseagreen", "red3"),
+  col = c("mediumseagreen", "red3"),
+  cex = c(2,2,2),
+  cat.cex = c(2,2),
+  cat.pos = c(-20, 10),
+  cat.dist = 0.09,
+  fontfamily = "sans",
+  cat.fontfamily = "sans"
+)
+
+## private
+
+
+library(VennDiagram)
+library(ggplot2)
+
+if(dev.cur() >1) dev.off()
+quartz(height = 10, width = 10, dpi =72);
+theme_set(theme_bw(24) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("errorbar", aes(size = 2))
+update_geom_defaults("point", aes(size = 8))
+theme_update(plot.title = element_text(hjust = 0.5))
+
+A = "Private TRA"
+B = "PIT-matched junctions"
+
+#A = paste("islet", "\nintersect", "AgSp", sep = " ")
+#B = paste("islet", "\nintersect", "Shingrix", sep = " ")
+
+venn.plot <- draw.pairwise.venn(
+  area1 = 268,
+  area2 = 942,
+  cross.area = 75,
+  category = c(A, B),
+  fill = c("mediumseagreen", "red3"),
+  col = c("mediumseagreen", "red3"),
+  cex = c(2,2,2),
+  cat.cex = c(2,2),
+  cat.pos = c(-20, 10),
+  cat.dist = 0.09,
+  fontfamily = "sans",
+  cat.fontfamily = "sans"
+)

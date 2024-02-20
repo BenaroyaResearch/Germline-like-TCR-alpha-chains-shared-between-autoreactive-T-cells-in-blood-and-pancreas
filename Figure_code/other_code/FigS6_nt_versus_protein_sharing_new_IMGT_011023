@@ -1,0 +1,1208 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(gdata)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+library(scales)
+library(Peptides)
+library(readxl)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load IMGT data all TCRs
+
+imgt = read.delim("IMGT_all_filtered_3_Nt-sequences.txt", stringsAsFactors = F)
+
+ids= data.frame(strsplit2(imgt$Sequence.ID, split = "_"))
+ids$X1 = NULL
+colnames(ids) = c("libid", "protJunction", "set", "PITmatch", "expanded", "chainType")
+
+## add pgen scores
+
+pgen = read.csv("Table_S4_Compiled_and_filtered_TCR_sequencces_used_in_this_study.csv")
+imgt$pgen = pgen$pgen[match(imgt$junction, pgen$junction)]
+
+## subset TRA and TRB
+toPlotTra = subset(toPlot, chainType == "TRA") # 3907 unique
+toPlotTrb = subset(toPlot, chainType == "TRB") # 3694
+#toPlotTrb$PITmatch = ifelse(toPlotTrb$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+
+## select TCRs to use
+
+traMatchT = subset(toPlotTra,PITmatch == "TRUE") # 1235
+traMatchF = subset(toPlotTra,PITmatch == "FALSE") # 2672
+
+## identify subset of TRB chains that pair with PITmatched TRA chains & add PIT matching status for TRA chains
+
+toPlotTrb = subset(toPlot, libid %in% toPlotTra$libid & chainType == "TRB") # 3270
+toPlotTrb$PITmatch = ifelse(toPlotTrb$libid %in% traMatchT$libid, "TRUE", "FALSE") # 2166 TRUE, 1104 FALSE
+
+## subset to PITmatch T and F
+
+#trbMatchT = subset(toPlot,PITmatch == "TRUE") # 1235
+#trbMatchF = subset(toPlot,PITmatch == "FALSE") # 6398
+
+trbMatchT = subset(toPlotTrb,PITmatch == "TRUE") # 1104
+trbMatchF = subset(toPlotTrb,PITmatch == "FALSE") # 2166
+
+###################### 
+## compare TRA overlap at nucleotide and protein levels
+
+var = all # 7633
+
+var1Name = c("TRA")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+imgt = subset(imgt, libid %in% all$libid) # 5339
+#imgtAA = subset(imgtAA, libid %in% all$libid) # 5339
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add variables to imgt
+
+#imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+
+imgt$E = imgt$junction %in% E$junction
+
+table(imgt$E)
+
+#FALSE  TRUE 
+# 4866   464 
+
+imgt$donorId = all$donor_id[match(imgt$libid, all$libid)] # 84 unique
+
+
+#var$imgtJunction = paste(0, imgt$libid, imgt$junction)
+     
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  1787  375
+
+
+## subset by junction
+
+imgtTra = subset(imgt, chainType == "TRA") # 2715
+imgtTrb = subset(imgt, chainType == "TRB") # 2615
+
+var = imgt # 2715 TRA
+
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+}
+
+#var$libidJunction = paste(0, var$libid, var$junction)
+
+## subset to E junctions if desired
+
+sub = imgtTra #3907 
+#sub = var[var$libid %in% E.cell$libid,] # 1000 TRA, 874 TRB
+sub$ntJunction = sub$JUNCTION
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donorId))) # 2699 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(junction, ntJunction, PITmatch, E), plyr::summarize, sum = length(unique(donorId))) # 2713 TRA, 3232 TRB protein. sum(ntShare$sum) = 2715 TRA, 3243 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 187 20
+#TRUE   94 56
+fisher.test(c) # 3.475e-16 TRA; 0.692 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2359 7
+#TRUE  1015 7
+
+fisher.test(c) #0.14; 0.01331 TRB
+
+## make plot
+
+if(dev.cur()>1) dev.off()
+quartz(width=18,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 6))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(paired, aes(x = (sum.x), (y = sum.y))) + geom_jitter(aes(color = PITmatch.x), alpha = 0.8, width = 0.15) 
+last_plot() + scale_x_continuous(limits = c(0,8))
+last_plot() + scale_y_continuous(limits = c(0,8))
+last_plot() + geom_abline(xintercept = 0, slope = 1, lty = "solid") 
+last_plot() + facet_wrap(~E.x)
+
+xlab = "\nDonors/TRA junction (protein)"
+ylab = "Donors/TRA junction (nt)\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+last_plot() + scale_colour_manual(values= cbPalette)
+
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4A_", var1Name, "_donors_per_junction_prot_vs_nt.pdf") #TRA
+
+ggsave(filename, p)
+
+###################### 
+## compare TRB overlap at nucleotide and protein levels
+
+var = all # 7633
+
+var1Name = c("TRB")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add protein sequence to imgt
+
+imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+      
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  2624  297
+
+## subset by junction
+
+var = subset(var, chainType == var1Name) # 3907 TRA 3694 TRB
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "PIT-matched", "non-PIT-matched") # 1104 TRUE, 2590 FALSE
+}
+
+## subset to E junctions if desired
+
+sub = var #3907 TRA, 3694 TRB
+sub$ntJunction = sub$full_nt_sequence
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3264 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(ntJunction, junction, PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3388 TRA, 3247 TRB protein. sum(ntShare$sum) = 3405 TRA, 3257 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 2285 15
+#TRUE   898 12
+fisher.test(c) # 3.475e-16 TRA; 0.08366 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2312 8
+#TRUE  925 2
+
+fisher.test(c) #0.14; 0.7341 TRB
+
+## make plot
+
+if(dev.cur()>1) dev.off()
+quartz(width=18,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 6))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(paired, aes(x = (sum.x), (y = sum.y))) + geom_jitter(aes(color = PITmatch.x), alpha = 0.8, width = 0.15) 
+last_plot() + scale_x_continuous(limits = c(0,8))
+last_plot() + scale_y_continuous(limits = c(0,8))
+last_plot() + geom_abline(xintercept = 0, slope = 1, lty = "solid") 
+last_plot() + facet_wrap(~E.x)
+
+xlab = "\nDonors/TRA junction (protein)"
+ylab = "Donors/TRA junction (nt)\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+last_plot() + scale_colour_manual(values= cbPalette)
+
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4B_", var1Name, "_donors_per_junction_prot_vs_nt.pdf") #TRB
+
+ggsave(filename, p)
+
+###################### 
+## barplots comparing PIT match with one versus multi donor TRA junctions at the protein level
+
+var = all # 7633
+
+var1Name = c("TRA")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add protein sequence to imgt
+
+imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+      
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+# table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  2624  297
+
+## subset by junction
+
+var = subset(var, chainType == var1Name) # 3907 TRA 3694 TRB
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+}
+
+## subset to E junctions if desired
+
+sub = var #3907 
+#sub = var[var$libid %in% E.cell$libid,] # 1000 TRA, 874 TRB
+sub$ntJunction = sub$full_nt_sequence
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3264 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(ntJunction, junction, PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3388 TRA, 3232 TRB protein. sum(ntShare$sum) = 3405 TRA, 3243 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 187 20
+#TRUE   94 56
+fisher.test(c) # 3.475e-16 TRA; 0.692 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2359 7
+#TRUE  1015 7
+
+fisher.test(c) #0.14; 0.01331 TRB
+
+## make plot
+
+## make bar blot
+df1 = data.frame(oneDonorProt, donors = "one")
+df2 = data.frame(multDonorProt, donors = "multiple")
+
+df3 = rbind(df1, df2)
+df4 = data.frame(table(df3$PITmatch, df3$donors))
+colnames(df4) = c("PITmatch", "Donors", "no.")
+toPlot = df4
+tot = data.frame(table(df3$donors))
+toPlot$PITmatch = gsub("TRUE", "PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE", "non-PIT-matched", toPlot$PITmatch)
+toPlot$tot = ifelse(toPlot$Donors == "one", tot[2,2], tot[1,2])
+toPlot$Freq = toPlot$no/toPlot$tot
+
+## plot donors per protein or nt junction
+
+if(dev.cur()>1) dev.off()
+quartz(width=12,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 4))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Donors, y = Freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + scale_y_continuous(limits = c(0, 1.10), breaks = c(0.00,0.25, 0.50,0.75, 1.000))
+
+xlab = "\nDonors/TRA junction (protein)"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4C_", var1Name, "_PIT_match_enrichment_protein_level.pdf") #TRA
+
+ggsave(filename, p)
+
+###################### 
+## barplots comparing PIT match with one versus multi donor TRB junctions at the protein level
+
+var = all # 7633
+
+var1Name = c("TRB")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add protein sequence to imgt
+
+imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+      
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  2624  297
+
+## subset by junction
+
+var = subset(var, chainType == var1Name) # 3907 TRA 3694 TRB
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+}
+
+## subset to E junctions if desired
+
+sub = var #3907 TRA, 3694 TRB
+sub$ntJunction = sub$full_nt_sequence
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3264 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(ntJunction, junction, PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3388 TRA, 3247 TRB protein. sum(ntShare$sum) = 3405 TRA, 3257 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 2285 15
+#TRUE   898 12
+fisher.test(c) # 3.475e-16 TRA; 0.08366 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2312 8
+#TRUE  925 2
+
+fisher.test(c) #0.14; 0.7341 TRB
+
+## make bar blot
+df1 = data.frame(oneDonorProt, donors = "one")
+df2 = data.frame(multDonorProt, donors = "multiple")
+
+df3 = rbind(df1, df2)
+df4 = data.frame(table(df3$PITmatch, df3$donors))
+colnames(df4) = c("PITmatch", "Donors", "no.")
+toPlot = df4
+tot = data.frame(table(df3$donors))
+toPlot$PITmatch = gsub("TRUE", "PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE", "non-PIT-matched", toPlot$PITmatch)
+toPlot$tot = ifelse(toPlot$Donors == "one", tot[2,2], tot[1,2])
+toPlot$Freq = toPlot$no/toPlot$tot
+
+## plot donors per protein or nt junction
+
+if(dev.cur()>1) dev.off()
+quartz(width=12,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 4))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Donors, y = Freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + scale_y_continuous(limits = c(0, 1.10), breaks = c(0.00,0.25, 0.50,0.75, 1.000))
+
+xlab = "\nDonors/TRB junction (protein)"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4D_", var1Name, "_PIT_match_enrichment_protein_level.pdf") #
+
+ggsave(filename, p)
+
+###################### 
+## barplots comparing PIT match with one versus multi donor TRA junctions at the nucleotide level
+
+var = all # 7633
+
+var1Name = c("TRA")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add protein sequence to imgt
+
+imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+      
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+# table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  2624  297
+
+## subset by junction
+
+var = subset(var, chainType == var1Name) # 3907 TRA 3694 TRB
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+}
+
+## subset to E junctions if desired
+
+sub = var #3907 
+#sub = var[var$libid %in% E.cell$libid,] # 1000 TRA, 874 TRB
+sub$ntJunction = sub$full_nt_sequence
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3264 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(ntJunction, junction, PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3388 TRA, 3232 TRB protein. sum(ntShare$sum) = 3405 TRA, 3243 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 187 20
+#TRUE   94 56
+fisher.test(c) # 3.475e-16 TRA; 0.692 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2359 7
+#TRUE  1015 7
+
+fisher.test(c) #0.14; 0.01331 TRB
+
+## make plot
+
+## make bar blot
+df1 = data.frame(oneDonorNt, donors = "one")
+df2 = data.frame(multDonorNt, donors = "multiple")
+
+df3 = rbind(df1, df2)
+df4 = data.frame(table(df3$PITmatch, df3$donors))
+colnames(df4) = c("PITmatch", "Donors", "no.")
+toPlot = df4
+tot = data.frame(table(df3$donors))
+toPlot$PITmatch = gsub("TRUE", "PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE", "non-PIT-matched", toPlot$PITmatch)
+toPlot$tot = ifelse(toPlot$Donors == "one", tot[2,2], tot[1,2])
+toPlot$Freq = toPlot$no/toPlot$tot
+
+## plot donors per protein or nt junction
+
+if(dev.cur()>1) dev.off()
+quartz(width=12,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 4))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Donors, y = Freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + scale_y_continuous(limits = c(0, 1.10), breaks = c(0.00,0.25, 0.50,0.75, 1.000))
+
+xlab = "\nDonors/TRA junction (nucleotide)"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4E_", var1Name, "_PIT_match_enrichment_nucleotide_level.pdf") #TRA
+
+ggsave(filename, p)
+
+###################### 
+## barplots comparing PIT match with one versus multi donor TRB junctions at the nucleotide level
+
+var = all # 7633
+
+var1Name = c("TRB")
+
+## load junction nt sequences
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+imgt1 = read.delim("P91_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt1$set = c('IAR1')
+seqId1 = data.frame(strsplit2(imgt1$Sequence.ID, split = "_"))
+colnames(seqId1) = c("libid", "junction")
+imgt1 = cbind(seqId1, imgt1)
+
+imgt2 = read.delim("P325_P474_3_Nt-sequences.txt", stringsAsFactors = F)
+imgt2$set = c('IAR2')
+
+## add junction and libid to imgt2
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+imgt2Tcrs = read.delim("P325_P474_CD4_unique_TCRs.txt", stringsAsFactors = F)
+seqId2 = data.frame(imgt2Tcrs$libid, imgt2Tcrs$junction)
+colnames(seqId2) = c("libid", "junction")
+imgt2 = cbind(seqId2, imgt2)
+
+imgt1AA =  read.delim("P91_5_AA-sequences.txt", stringsAsFactors = F)
+imgt1AA$set = c('IAR1')
+imgt2AA =  read.delim("P325_P474_5_AA-sequences.txt", stringsAsFactors = F)
+imgt2AA$set = c('IAR2')
+imgt2AA$X = NULL
+
+imgt = rbind(imgt1, imgt2) # 6385
+imgtAA = rbind(imgt1AA, imgt2AA)# 6385
+
+## check on id order
+
+all(imgt$Sequence.number == imgtAA$Sequence.number)
+#[1] TRUE
+
+table(imgt$set)
+#IAR1 IAR2 
+#3168 2921 
+
+table(imgtAA$set)
+#IAR1 IAR2 
+#3168 3217 ## why not the same as nt?
+
+## add protein sequence to imgt
+
+imgt$junction = imgtAA$JUNCTION[match(imgt$Sequence.number, imgtAA$Sequence.number)]
+imgt$PITmatch = imgt$junction %in% levSubIAR1$aJunc1 | imgt$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+imgt = subset(imgt, !chainType == "other") #6089
+
+#imgt = subset(imgt, set == "IAR2") # for troubleshooting
+
+imgt = subset(imgt, !(set == "IAR2" & chainType == "TRB" & PITmatch == "TRUE")) # these shouldn't be here. remove from analysis
+      
+table(imgt$set, imgt$chainType)
+      
+#        TRA  TRB
+#  IAR1 1606 1562
+#  IAR2 1620 1301
+
+table(imgt$set, imgt$PITmatch)
+      
+#       FALSE TRUE
+#  IAR1  2595  573
+#  IAR2  2624  297
+
+## subset by junction
+
+var = subset(var, chainType == var1Name) # 3907 TRA 3694 TRB
+var$PITmatch = gsub("TRUE", "PIT-matched", var$PITmatch)
+var$PITmatch = gsub("FALSE", "non-PIT-matched", var$PITmatch)
+
+if (var1Name == "TRB") {
+var$PITmatch = ifelse(var$libid %in% traMatchT$libid, "TRUE", "FALSE") # 1104 TRUE, 2590 FALSE
+}
+
+## subset to E junctions if desired
+
+sub = var #3907 TRA, 3694 TRB
+sub$ntJunction = sub$full_nt_sequence
+
+## aggregate shared junctions per donor
+
+protShare =  ddply(sub,.(junction,  PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3264 TRA, 3210 TRB protein. sum(protShare$sum) = 3360 TRA, 3238 TRB
+ntShare =  ddply(sub,.(ntJunction, junction, PITmatch, E), plyr::summarize, sum = length(unique(donor_id))) # 3388 TRA, 3247 TRB protein. sum(ntShare$sum) = 3405 TRA, 3257 TRB
+
+paired = merge(protShare, ntShare, by = "junction")
+ratio = data.frame(paired$junction, paired$sum.x/paired$sum.y)
+colnames(ratio) = c("junction", "ratio")
+ratioTRA = ratio # change to ratioTRB when needed
+
+protShare$ratio = ratio$ratio[match(protShare$junction, ratio$junction)]
+ntShare$ratio = ratio$ratio[match(ntShare$junction, ratio$junction)]
+ntShare$ntJunction = NULL
+
+all(paired$donor_id.x == paired$donor_id.y) # TRUE TRA; TRUE TRB
+all(paired$PITmatch.x == paired$PITmatch.y) # TRUE TRA; FALSE TRB
+all(paired$sum.x == paired$sum.y) # FALSE TRA; FALSE TRB
+all(paired$E.x == paired$E.y) # TRUE TRA; TRUE  TRB
+
+paired$E.x = gsub("TRUE", "Expanded", paired$E.x)
+paired$E.x = gsub("FALSE", "non-Expanded", paired$E.x)
+
+## protein level
+
+oneDonorProt = subset(protShare, sum == 1) # 3188 TRA; 3183 TRB
+multDonorProt = subset(protShare, sum > 1) # 76 TRA; 27 TRB
+
+## significance on one versus multi by chain
+
+a = c(3188, 76) # one versus multi for TRA
+b = c(3183, 27) # one versus multi for TRB
+c = cbind(a,b)
+fisher.test(c) # 1.302e-06 for all
+
+## significance of PITmatch enrichment
+
+a = table(oneDonorProt$PITmatch)
+b = table(multDonorProt$PITmatch)
+c = cbind(a,b);c
+#        a  b
+#FALSE 2285 15
+#TRUE   898 12
+fisher.test(c) # 3.475e-16 TRA; 0.08366 TRB
+
+## nt level
+
+oneDonorNt = subset(ntShare, sum == 1) # 3374 TRA; 3221 TRB
+multDonorNt = subset(ntShare, sum > 1) # 14 TRA; 11 TRB
+
+a = table(oneDonorNt$PITmatch)
+b = table(multDonorNt$PITmatch)
+c = cbind(a,b);c
+c
+#        a b
+#FALSE 2312 8
+#TRUE  925 2
+
+fisher.test(c) #0.14; 0.7341 TRB
+
+## make bar blot
+df1 = data.frame(oneDonorNt, donors = "one")
+df2 = data.frame(multDonorNt, donors = "multiple")
+
+df3 = rbind(df1, df2)
+df4 = data.frame(table(df3$PITmatch, df3$donors))
+colnames(df4) = c("PITmatch", "Donors", "no.")
+toPlot = df4
+tot = data.frame(table(df3$donors))
+toPlot$PITmatch = gsub("TRUE", "PIT-matched", toPlot$PITmatch)
+toPlot$PITmatch = gsub("FALSE", "non-PIT-matched", toPlot$PITmatch)
+toPlot$tot = ifelse(toPlot$Donors == "one", tot[2,2], tot[1,2])
+toPlot$Freq = toPlot$no/toPlot$tot
+
+## plot donors per protein or nt junction
+
+if(dev.cur()>1) dev.off()
+quartz(width=12,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 4))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Donors, y = Freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + scale_y_continuous(limits = c(0, 1.10), breaks = c(0.00,0.25, 0.50,0.75, 1.000))
+
+xlab = "\nDonors/TRB junction (nucleotide)"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + guides(col= guide_legend(title= "PIT match"))
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4F_", var1Name, "_PIT_match_enrichment_nucleotide_level.pdf") #
+
+ggsave(filename, p)

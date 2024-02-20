@@ -1,0 +1,980 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(readxl)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load matches
+
+levIAR1 = read.csv("Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+filename = ("Levenshtein_index_P324_P474_IAR_CD4_with_islet_TCRS_lv.lt6.csv")
+
+levIAR2 = read.csv(filename, stringsAsFactors = F)
+
+levSubIAR1 = subset(levIAR1, levIAR1$lv <2); nrow(levSubIAR1) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+levSubIAR2 = subset(levIAR2, levIAR2$lv <2); nrow(levSubIAR2) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+
+## load IAR1 TCRs
+
+IAR1Tcrs = read.csv("201512_TCR_MasterList_w_CloneIDs.csv", stringsAsFactors = F) # 5417
+colnames(IAR1Tcrs) = gsub("tcrGraph_sharing_level", "sharing_level", colnames(IAR1Tcrs))
+
+IAR1Tcrs = data.frame(IAR1Tcrs, set = "IAR1")
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames)]
+IAR1Tcrs$study_group = gsub("early onset T1D", "newT1D", IAR1Tcrs$study_group)
+
+## create IAR1 hla
+
+hla = read_excel("subject_char_w_HLA.xlsx")
+
+## correct donor id
+
+hla$'Subject ID' = gsub('TID', "T1D", hla$'Subject ID')
+
+## load ID key
+
+idKey = read_excel("P91_P168 Sample_ID_key.xlsx")
+
+idKey$tcrId = gsub("HC10, Ctrl10", "CTRL10", idKey$tcrId)
+
+## remove whitespace
+
+hla$'Subject ID' = stringr::str_trim(hla$'Subject ID')
+idKey$suppTabId = stringr::str_trim(idKey$suppTabId)
+IAR1Tcrs$donor_id = stringr::str_trim(IAR1Tcrs$donor_id)
+
+## add suppTabId and then match HLA
+
+IAR1Tcrs$suppTabId = idKey$suppTabId[match(IAR1Tcrs$donor_id, idKey$tcrId)]
+IAR1Tcrs$hla = hla$DRB1[match(IAR1Tcrs$suppTabId, hla$"Subject ID")]
+
+## check to see that HLA is present for most donors
+
+temp = subset(IAR1Tcrs, is.na(IAR1Tcrs$hla)) # 0/5417. 
+unique(temp$donor_id) #0
+
+tempa = subset(hla, hla$"Subject ID" == "CTRL10")
+tempb = subset(IAR1Tcrs, IAR1Tcrs$donor_id == "CTRL10")
+
+tempa$'Subject ID'
+unique(tempb$donor_id)
+
+colNames1 = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames1)] # 5417
+
+## load IAR2 TCRs
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)]
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_code")
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## save tcrsComb as Supplemental Table for manuscript
+
+toSave = tcrsComb
+toSave$set = gsub("IAR1", "Cohort1", toSave$set)
+toSave$set = gsub("IAR2", "Cohort2", toSave$set)
+table(toSave$set )
+
+#setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+#filename = "Table_S4_Compiled_and_filtered_TCR_sequences_used_in_this_study.csv"
+#write.csv(toSave, filename)
+
+## subset tcrsComb by HLA, if desired
+
+#tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # 6529 junctions, sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 855 E junctions, 135 unique
+libs = E$libid
+E.cell = subset(tcrsComb, tcrsComb$libid %in% libs) # 956
+
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+# 284     23     56    101    812    678 # all tcrs, not subsetted
+#   267      8     21     31    119    510 # hla  "04" subset
+   
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 1954 TRUE 5773 FALSE for junctions; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 18
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 45
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 7633
+
+## modify combined TCRs
+
+tcrsCombSub3$IARmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3Tra = subset(tcrsCombSub3, tcrsCombSub3$chainType == "TRA") # 1814
+tcrsCombSub3Tra.u = tcrsCombSub3Tra[!duplicated(tcrsCombSub3Tra$junction),] # 1512
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 2967
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 1512
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 1433
+
+tcrsCombSub3Tra$studyGroup = gsub("AAbNeg", "HC", tcrsCombSub3Tra$studyGroup)
+
+## load healthy (and COVID) repertoires and filter sequencces
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+su = read.csv("Su_et_al_filtered_TCRs.csv") # 326782
+su$X = NULL
+
+suNkt1 = subset(su, junction == "CVVSDRGSTLGRLYF") #45
+suNkt2 = subset(su, barcode %in% suNkt1$barcode) # 90
+sumait1 = subset(su, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 2533
+sumait2 = subset(su, barcode %in% sumait1$barcode) # 5106
+
+su = subset(su, !junction %in% suNkt2$junction & !junction %in% sumait2$junction) # 320372
+
+suTRA = subset(su, chainType == "TRA")
+suTRB = subset(su, chainType == "TRB")
+
+suCd4 = subset(su, su$cellType == "cd4")
+suCd8 = subset(su, su$cellType == "cd8")
+
+su.u = su[!duplicated(su$junction),]
+suHc = subset(su.u, group == "HC")
+suCovid = subset(su.u, group == "COVID")
+
+## get pancreatic TCR seqs from Maki Nakayama, MAKI.NAKAYAMA@CUANSCHUTZ.EDU
+
+mn = readxl::read_excel("220519_scPCR_Illumina.xlsx")
+mn$barcode = seq(1, nrow(mn), by = 1)
+
+comId = c("barcode", "Illumina", "Group", "Case_Tissue", "Subset", "Cell ID" )
+traId = c("Vgene...6", "Jgene...7", "Junction...8", "frame...9")
+trbId = c("Vgene...16", "Jgene...17", "Junction...18", "frame...19")
+
+mnA = mn[,c(comId, traId)]
+mnB = mn[,c(comId, trbId)]
+
+colnames(mnA) = c(comId, "v_gene", "j_gene", "junction", "frame")
+colnames(mnB) = c(comId, "v_gene", "j_gene", "junction", "frame")
+
+mnA$chain = paste(mnA$v_gene, mnA$junction, mnA$j_gene, sep = "_")
+mnB$chain = paste(mnB$v_gene, mnB$junction, mnB$j_gene, sep = "_")
+
+mnTcrs = rbind(mnA, mnB) # 18684
+mnTcrs = subset(mnTcrs, frame == "in-frame") # 14049
+
+length(unique(mnTcrs$junction)) # 9798  
+
+mn.u = mnTcrs[!duplicated(mnTcrs$chain),] # 
+
+## load HLA for pancreatic TCR seqs
+
+mnHla = readxl::read_excel("HLA_Typing.xlsx")
+colnames(mnHla)[1] = c("Sample.ID")
+
+## bring patients IDs into harmony
+mnHla$Sample.ID = gsub(" ", "", mnHla$Sample.ID)
+mnHla$Sample.ID = gsub("IIDP", "iidp", mnHla$Sample.ID)
+mn$Case_Tissue = gsub("_islets", "", mn$Case_Tissue)
+mn$Case_Tissue = gsub("_Islets", "", mn$Case_Tissue)
+
+mnTcrs$Case_Tissue = gsub("_islets", "", mnTcrs$Case_Tissue)
+mnTcrs$Case_Tissue = gsub("_Islets", "", mnTcrs$Case_Tissue)
+
+mnTcrs$drb1 = mnHla$DRB1...4[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+mnTcrs$drb1.1 = mnHla$DRB1...5[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+
+hla0401 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T))
+hla0301 = subset(mnTcrs, mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T))
+hla0404 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:04", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:04", mnTcrs$drb1.1, value = T))
+hla0101 = subset(mnTcrs, mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T))
+
+mnTcrs$hla = ifelse(mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T), "03:01", 
+				ifelse(mnTcrs$drb1 %in% grep("07:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("07:01", mnTcrs$drb1.1, value = T),
+"07:01", 				
+					ifelse(mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T), "04:01",
+						ifelse(mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T), "01:01", "other"))))
+
+mnTcrs.u = mnTcrs[!duplicated(mnTcrs$junction),] # 9798 
+						
+mn$hla = mnTcrs$hla[match(mn$Case_Tissue, mnTcrs$Case_Tissue)]
+
+## load IAR2 TCRs
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)]
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_code")
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## save tcrsComb as Supplemental Table for manuscript
+
+toSave = tcrsComb
+toSave$set = gsub("IAR1", "Cohort1", toSave$set)
+toSave$set = gsub("IAR2", "Cohort2", toSave$set)
+table(toSave$set )
+
+#setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+#filename = "Table_S4_Compiled_and_filtered_TCR_sequences_used_in_this_study.csv"
+#write.csv(toSave, filename)
+
+## subset tcrsComb by HLA, if desired
+
+#tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # 6529 junctions, sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 855 E junctions, 135 unique
+libs = E$libid
+E.cell = subset(tcrsComb, tcrsComb$libid %in% libs) # 956
+
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+# 284     23     56    101    812    678 # all tcrs, not subsetted
+#   267      8     21     31    119    510 # hla  "04" subset
+   
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 1954 TRUE 5773 FALSE for junctions; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 18
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 45
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 7633
+
+## modify combined TCRs
+
+tcrsCombSub3$IARmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 1235 T, 6398 F
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3Tra = subset(tcrsCombSub3, tcrsCombSub3$chainType == "TRA") # 1814
+tcrsCombSub3Tra.u = tcrsCombSub3Tra[!duplicated(tcrsCombSub3Tra$junction),] # 1512
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 2967
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 1512
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 1433
+
+tcrsCombSub3Tra$studyGroup = gsub("AAbNeg", "HC", tcrsCombSub3Tra$studyGroup)
+
+## select TCR subset to use
+
+all = subset(tcrsCombSub3, set == "IAR1") # 2725
+all.u = all[!duplicated(all$junction),] # 2174
+
+allSub = all.u
+
+all$study_group = gsub("early onset T1D", "newT1D", all$study_group)
+
+all.HC = subset(all, study_group == "HC") # 259
+all.newT1D = subset(all, study_group == "newT1D") # 497
+all.T1D = subset(all, study_group == "T1D") # 597
+
+## load healthy (and COVID) repertoires and filter sequencces
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data")
+
+su = read.csv("Su_et_al_filtered_TCRs.csv") # 326782
+su$X = NULL
+
+suNkt1 = subset(su, junction == "CVVSDRGSTLGRLYF") #45
+suNkt2 = subset(su, barcode %in% suNkt1$barcode) # 90
+sumait1 = subset(su, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 2533
+sumait2 = subset(su, barcode %in% sumait1$barcode) # 5106
+
+su = subset(su, !junction %in% suNkt2$junction & !junction %in% sumait2$junction) # 320372
+
+suTRA = subset(su, chainType == "TRA")
+suTRB = subset(su, chainType == "TRB")
+
+suCd4 = subset(su, su$cellType == "cd4")
+suCd8 = subset(su, su$cellType == "cd8")
+
+su.u = su[!duplicated(su$junction),]
+suHc = subset(su.u, group == "HC")
+suCovid = subset(su.u, group == "COVID")
+
+## get pancreatic TCR seqs from Maki Nakayama, MAKI.NAKAYAMA@CUANSCHUTZ.EDU
+
+mn = readxl::read_excel("220519_scPCR_Illumina.xlsx")
+mn$barcode = seq(1, nrow(mn), by = 1)
+
+comId = c("barcode", "Illumina", "Group", "Case_Tissue", "Subset", "Cell ID" )
+traId = c("Vgene...6", "Jgene...7", "Junction...8", "frame...9")
+trbId = c("Vgene...16", "Jgene...17", "Junction...18", "frame...19")
+
+mnA = mn[,c(comId, traId)]
+mnB = mn[,c(comId, trbId)]
+
+colnames(mnA) = c(comId, "v_gene", "j_gene", "junction", "frame")
+colnames(mnB) = c(comId, "v_gene", "j_gene", "junction", "frame")
+
+mnA$chain = paste(mnA$v_gene, mnA$junction, mnA$j_gene, sep = "_")
+mnB$chain = paste(mnB$v_gene, mnB$junction, mnB$j_gene, sep = "_")
+
+mnTcrs = rbind(mnA, mnB) # 18684
+mnTcrs = subset(mnTcrs, frame == "in-frame") # 14049
+mnTcrs$chainType = ifelse(mnTcrs$v_gene %in% grep("TRA", mnTcrs$v_gene, value = T), "TRA",
+						ifelse(mnTcrs$v_gene %in% grep("TRB", mnTcrs$v_gene, value = T), "TRB", "other"))
+mnTcrs$cellType = mnTcrs$Subset
+					
+length(unique(mnTcrs$junction)) # 9798  
+
+mn.u = mnTcrs[!duplicated(mnTcrs$chain),] # 9864
+
+## load HLA for pancreatic TCR seqs
+
+mnHla = readxl::read_excel("HLA_Typing.xlsx")
+colnames(mnHla)[1] = c("Sample.ID")
+
+## bring patients IDs into harmony
+mnHla$Sample.ID = gsub(" ", "", mnHla$Sample.ID)
+mnHla$Sample.ID = gsub("IIDP", "iidp", mnHla$Sample.ID)
+mn$Case_Tissue = gsub("_islets", "", mn$Case_Tissue)
+mn$Case_Tissue = gsub("_Islets", "", mn$Case_Tissue)
+
+mnTcrs$Case_Tissue = gsub("_islets", "", mnTcrs$Case_Tissue)
+mnTcrs$Case_Tissue = gsub("_Islets", "", mnTcrs$Case_Tissue)
+
+mnTcrs$drb1 = mnHla$DRB1...4[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+mnTcrs$drb1.1 = mnHla$DRB1...5[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+
+hla0401 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T))
+hla0301 = subset(mnTcrs, mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T))
+hla0404 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:04", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:04", mnTcrs$drb1.1, value = T))
+hla0101 = subset(mnTcrs, mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T))
+
+mnTcrs$hla = ifelse(mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T), "03:01", 
+				ifelse(mnTcrs$drb1 %in% grep("07:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("07:01", mnTcrs$drb1.1, value = T),
+"07:01", 				
+					ifelse(mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T), "04:01",
+						ifelse(mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T), "01:01", "other"))))
+
+mnTcrs.u = mnTcrs[!duplicated(mnTcrs$junction),] # 9798 
+						
+mn$hla = mnTcrs$hla[match(mn$Case_Tissue, mnTcrs$Case_Tissue)]
+
+## overlap of unique junctions
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all.u$junction)
+table(var1)
+#var1
+#FALSE  TRUE 
+# 9743    55 
+
+var1 = all.u$junction %in% intersect(mnTcrs$junction, all.u$junction)
+table(var1)
+
+#FALSE  TRUE 
+# 2119    55 
+
+##################
+## bar plot of matching chains
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+#toChar = var1
+toChar = subset(all.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar$chainType)
+
+df1 = table(toChar$chainType)
+
+#TRA TRB 
+# 55   7 
+
+toChar2 = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar2$Subset)
+
+var1 = all.u$junction %in% intersect(mnTcrs$junction, all.u$junction)
+table(var1)
+
+#FALSE  TRUE 
+# 2119    55 
+
+##################
+## bar plot of matching chains
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+#toChar = var1
+toChar = subset(all.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar$chainType)
+
+df1 = table(toChar$chainType)
+
+#TRA TRB 
+# 55   7 
+
+toChar2 = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar2$Subset)
+
+#CD4 CD8 
+# 51  45 
+
+## save mnTcrs for Supp. Table
+
+setwd("/Users/peterlinsley/Dropbox/Mac/Desktop/PIT_TCR_paper_code/Figure_code")
+filename = "Table S4. PIT_TCRs_used_in_thhis_study.csv"
+#write.csv(mnTcrs.u, filename)
+
+##################
+## bar plots of all chains to be compared with matching distributions in main text
+
+toChar = mnTcrs.u
+
+toChar$chainType = ifelse(toChar$v_gene %in% grep("TRA", toChar$v_gene, value = T), "TRA",
+						ifelse(toChar$v_gene %in% grep("TRB", toChar$v_gene, value = T), "TRB", "other"))
+						
+toChar = subset(toChar, !chainType == "other")
+
+toChar$Subset = ifelse(toChar$Subset %in% grep("CD4", toChar$Subset, value = T), "CD4",
+					ifelse(toChar$Subset %in% grep("CD8", toChar$Subset, value = T), "CD8", "other"))
+toChar$Group = gsub("AAb", "AAb+", toChar$Group)
+
+DF1 = data.frame(table(toChar$chainType))
+DF2 = data.frame(table(toChar$Subset))
+DF3 = data.frame(table(toChar$Group))
+DF4 = data.frame(table(toChar$hla))
+
+length(toChar$junction)
+#[1] 9757
+DF1
+#  Var1 Freq
+#1  TRA 4614
+#2  TRB 5143
+DF2
+#  Var1 Freq
+#1  CD4 4694
+#2  CD8 5063
+DF3
+#     Var1 Freq
+#1     AAb 1442
+#2 non-T1D 1779
+#3     T1D 6536
+DF4
+#   Var1 Freq
+#1 03:01 5144
+#2 04:01 1077
+#3 07:01 2334
+#4 other 1202
+
+##################
+## bar plot of matching chains
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+#toChar = var1
+#toChar = subset(all.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar$chainType)
+
+df1 = data.frame(table(toChar$chainType))
+df1
+
+#TRA TRB 
+# 55   7 
+
+df1$sum = sum(df1$Freq)
+df1$frequency = df1$Freq/df1$sum
+df1$set = c("IARmatch")
+
+DF1$sum = sum(DF1$Freq)
+DF1$frequency = DF1$Freq/DF1$sum
+DF1$set = c("total")
+
+toPlot = rbind(df1, DF1)
+
+toTest = cbind(df1$Freq, DF1$Freq)
+fisher.test(toTest) # p-value = 1.078e-11
+
+if(dev.cur()>1) dev.off()
+quartz(width=10,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Var1, y = frequency, fill = set)) + geom_bar(stat="identity", position=position_dodge())
+last_plot() + scale_fill_manual(values=cbPalette)
+
+xlab = "\nPIT TCR chain"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + scale_y_continuous(limits = c(0.0, 1.0), breaks = c(0.0,0.25,0.50,0.75,1.0))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "Fig_S1A_barplot_chain_type_matches_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## bar plot of matching cell types
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+#toChar = var1
+toChar2 = subset(all.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar$chainType)
+
+df2 = data.frame(table(toChar$cellType))
+
+#Var1 Freq
+#1  CD4   28
+#2  CD8   34
+
+df2$sum = sum(df2$Freq)
+df2$frequency = df2$Freq/df2$sum
+df2$set = c("IARmatch")
+
+DF2$sum = sum(DF2$Freq)
+DF2$frequency = DF2$Freq/DF2$sum
+DF2$set = c("total")
+
+toPlot = rbind(df2, DF2)
+
+toTest = cbind(df2$Freq, DF2$Freq)
+fisher.test(toTest) # p-value = 0.7028
+
+if(dev.cur()>1) dev.off()
+quartz(width=10,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Var1, y = frequency, fill = set)) + geom_bar(stat="identity", position=position_dodge())
+last_plot() + scale_fill_manual(values=cbPalette)
+
+xlab = "\nPIT cell type"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + scale_y_continuous(limits = c(0.0, 0.50) ) # breaks = c(0.0,0.25,0.50)
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "Fig_S1B_barplot_cell_type_matches_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## bar plot of matching disease groups
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar2 = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+table(toChar2$Group)
+
+toChar2$Group = gsub("non-T1D", "HC", toChar2$Group)
+toChar2$Group = gsub("AAb", "AAb+", toChar2$Group)
+toChar2$Group = factor(toChar2$Group, levels = c("HC", "AAb+", "T1D"))
+
+df3 = data.frame(table(toChar2$Group))
+df3
+
+#Var1 Freq
+#Var1 Freq
+#1   HC   12
+#2 AAb+    7
+#3  T1D   43
+
+df3$sum = sum(df3$Freq)
+df3$frequency = df3$Freq/df3$sum
+df3$set = c("IARmatch")
+
+DF3$sum = sum(DF3$Freq)
+DF3$frequency = DF3$Freq/DF3$sum
+DF3$set = c("total")
+
+toPlot = rbind(df3, DF3)
+
+toPlot$Var1 = gsub("non-T1D", "HC", toPlot$Var1)
+toPlot$Var1 = gsub("AAb\\++", "AAb\\+", toPlot$Var1)
+toPlot$Var1 = factor(toPlot$Var1, levels = c("HC", "AAb+", "T1D"))
+
+toTest = cbind(df3$Freq, DF3$Freq)
+fisher.test(toTest) # p-value = 0.259
+
+if(dev.cur()>1) dev.off()
+quartz(width=10,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Var1, y = frequency, fill = set)) + geom_bar(stat="identity", position=position_dodge())
+last_plot() + scale_fill_manual(values=cbPalette)
+
+xlab = "\nPIT Disease Group"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + scale_y_continuous(limits = c(0.0, 0.50) ) # breaks = c(0.0,0.25,0.50)
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "Fig_S1C_barplot_Group_matches_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## bar plot of matching hla
+
+## characterize overlapping AgSp chains
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all$junction)
+toChar2 = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, all$junction))
+
+table(toChar2$hla)
+
+toChar2$hla = gsub("non-T1D", "HC", toChar2$hla)
+toChar2$hla = gsub("AAb", "AAb+", toChar2$hla)
+#toChar2$hla = factor(toChar2$hla, levels = c("HC", "AAb+", "T1D"))
+
+df4 = data.frame(table(toChar2$hla))
+df4
+
+#Var1 Freq
+#1 03:01   34
+#2 04:01    6
+#3 07:01   12
+#4 other   10 
+
+df4$sum = sum(df4$Freq)
+df4$frequency = df4$Freq/df4$sum
+df4$set = c("IARmatch")
+
+DF4$sum = sum(DF4$Freq)
+DF4$frequency = DF4$Freq/DF4$sum
+DF4$set = c("total")
+
+toPlot = rbind(df4, DF4)
+
+toTest = cbind(df4$Freq, DF4$Freq)
+fisher.test(toTest) # p-value = 0.7069
+
+if(dev.cur()>1) dev.off()
+quartz(width=10,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = Var1, y = frequency, fill = set)) + geom_bar(stat="identity", position=position_dodge())
+last_plot() + scale_fill_manual(values=cbPalette)
+
+xlab = "\nPIT HLA class II allele"
+ylab = "Frequency\n"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + scale_y_continuous(limits = c(0.0, 0.50) ) # breaks = c(0.0,0.25,0.50)
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "Fig_S1D_barplot_hla_matches_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+
+
+
+
+
+
+
+
+
+
+
+toChar2 = subset(mnTcrs.u, junction %in% intersect(mnTcrs.u$junction, tcrsCombSub3.u$junction))
+
+table(toChar2$Subset)
+
+#CD4 CD8 
+# 51  45
+
+df1 = data.frame(table(toChar$chainType))
+df2 = data.frame(table(toChar2$chainType))
+df3 = data.frame(table(toChar2$Subset))
+
+##################
+## make plot TRA/TRB overlap in IAR2
+
+if(dev.cur()>1) dev.off()
+quartz(width=6,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df1, aes(x = Var1, y = Freq)) + geom_col(fill = "blue")
+
+xlab = "IAR TCR chain\n"
+ylab = "Number perfectly matched PIT junctions"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + coord_flip()
+last_plot() + scale_y_continuous(breaks = c(0,10,20,30,40,50))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "Fig_1A_barplot_Perfectly matched IAR T cell TCR junctions in PIT TCRs.pdf"
+ggsave(filename, p)
+
+if(dev.cur()>1) dev.off()
+quartz(width=6,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df1, aes(x = Var1, y = Freq)) + geom_col(fill = "blue")
+
+xlab = "PIT TCR chain\n"
+ylab = "Number unique junctions"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + coord_flip()
+#last_plot() + scale_y_continuous(breaks = c(0,10,20,30,40,50))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "FigS1A_TCR_chain_types_in_total_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## make plot cell types
+
+if(dev.cur()>1) dev.off()
+quartz(width=6,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df2, aes(x = Var1, y = Freq)) + geom_col(fill = "blue")
+
+xlab = "Cell type of origin\n"
+ylab = "Number unique junctions"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + coord_flip()
+#last_plot() + scale_y_continuous(breaks = c(0,10,20,30,40,50))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "FigS1B_Cell_types_yielding_total_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## make plot patient groups
+
+if(dev.cur()>1) dev.off()
+quartz(width=6,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df3, aes(x = Var1, y = Freq)) + geom_col(fill = "blue")
+
+xlab = "Patient group\n"
+ylab = "Number unique junctions"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + coord_flip()
+#last_plot() + scale_y_continuous(breaks = c(0,10,20,30,40,50))
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "FigS1C_Patient_group_of_total_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+##################
+## make plot patient groups
+
+if(dev.cur()>1) dev.off()
+quartz(width=6,height=12, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(38) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df4, aes(x = Var1, y = Freq)) + geom_col(fill = "blue")
+
+xlab = "HLA class II allele\n"
+ylab = "Number unique junctions"
+last_plot() + labs(x = xlab, y = ylab)
+#last_plot() + coord_flip()
+#last_plot() + scale_y_continuous(breaks = c(0,10,20,30,40,50))
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs")
+filename = "FigS1D_HLA_classII_allele_yielding_total_PIT_TCRs.pdf"
+ggsave(filename, p)
+
+########################
+## comparisons of PM subgroups with total
+
+var1 = mnTcrs.u$junction %in% intersect(mnTcrs$junction, all.u$junction)
+table(var1)
+
+#FALSE  TRUE 
+# 9736    62  
+
+var1Sub = subset(toChar, junction %in% intersect(mnTcrs$junction, all.u$junction))
+
+
+df1Sub = data.frame(table(var1Sub$chainType))
+df2Sub = data.frame(table(var1Sub$Subset))
+df3Sub = data.frame(table(var1Sub$Group))
+df4Sub = data.frame(table(var1Sub$hla))
+
+c1 = cbind(df1[[2]], df1Sub[[2]])
+c2 = cbind(df2[[2]], df2Sub[[2]])
+c3 = cbind(df3[[2]], df3Sub[[2]])
+c4 = cbind(df4[[2]], df4Sub[[2]])
+
+fisher.test(c1) # p-value = 1.078e-11
+fisher.test(c2) # p-value = 0.7028
+fisher.test(c3) # p-value = 0.7806
+fisher.test(c4) # p-value = 0.7069
+
+## NB, only chain type shows significant difference with total population
+
+
+

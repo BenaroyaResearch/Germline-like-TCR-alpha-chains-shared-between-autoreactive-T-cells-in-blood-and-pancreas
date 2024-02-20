@@ -1,0 +1,716 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(gdata)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load matches
+
+levIAR1 = read.csv("/Users/peterlinsley/Dropbox/RNAseq/Maki_Nakayama/Levenshtein_coefficients_IAR_cells/Levenshtein_index_IAR_w_islets/Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+filename = ("Levenshtein_index_P324_P474_IAR_CD4_with_islet_TCRS_lv.lt6.csv")
+
+levIAR2 = read.csv(filename, stringsAsFactors = F)
+
+levSubIAR1 = subset(levIAR1, levIAR1$lv <2); nrow(levSubIAR1) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+levSubIAR2 = subset(levIAR2, levIAR2$lv <2); nrow(levSubIAR2) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+
+## load IAR1 TCRs
+
+IAR1Tcrs = read.csv("/Users/peterlinsley/Dropbox/RNAseq/P91_Karen_Junbao/12012020_new_cloneIds/201512_TCR_MasterList_w_CloneIDs.csv", stringsAsFactors = F) # 5729
+colnames(IAR1Tcrs) = gsub("tcrGraph_sharing_level", "sharing_level", colnames(IAR1Tcrs))
+
+IAR1Tcrs = data.frame(IAR1Tcrs, set = "IAR1")
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames)]
+IAR1Tcrs$study_group = gsub("early onset T1D", "newT1D", IAR1Tcrs$study_group)
+
+## add HLA
+hla = read_excel("subject_char_w_HLA.xlsx")
+
+## load ID key
+
+idKey = read_excel("P91_P168 Sample_ID_key.xlsx")
+
+################
+## corrections to annotation
+
+## correct mislabeled study groups
+
+idKey$tcrId = gsub("HC10, Ctrl10", "CTRL10", idKey$tcrId)
+
+IAR1Tcrs$study_group = ifelse(IAR1Tcrs$donor_id == "Ctrl10", gsub("T1D", "HC", IAR1Tcrs$study_group), IAR1Tcrs$study_group)
+IAR1Tcrs$study_group = ifelse(IAR1Tcrs$donor_id == "Ctrl15", gsub("T1D", "HC", IAR1Tcrs$study_group), IAR1Tcrs$study_group)
+IAR1Tcrs$study_group = ifelse(IAR1Tcrs$donor_id == "Ctrl16", gsub("T1D", "HC", IAR1Tcrs$study_group), IAR1Tcrs$study_group)
+
+## correct donor ids
+
+hla$'Subject ID' = gsub('TID', "T1D", hla$'Subject ID')
+
+## remove whitespace
+
+hla$'Subject ID' = stringr::str_trim(hla$'Subject ID')
+idKey$suppTabId = stringr::str_trim(idKey$suppTabId)
+IAR1Tcrs$donor_id = stringr::str_trim(IAR1Tcrs$donor_id)
+
+## add suppTabId and then match HLA
+
+IAR1Tcrs$suppTabId = idKey$suppTabId[match(IAR1Tcrs$donor_id, idKey$tcrId)]
+IAR1Tcrs$hla = hla$DRB1[match(IAR1Tcrs$suppTabId, hla$"Subject ID")]
+
+## check to see that HLA is present for most donors
+
+temp = subset(IAR1Tcrs, is.na(IAR1Tcrs$hla)) # 0/5417. 
+unique(temp$donor_id) #0
+
+tempa = subset(hla, hla$"Subject ID" == "CTRL10")
+tempb = subset(IAR1Tcrs, IAR1Tcrs$donor_id == "CTRL10")
+
+tempa$'Subject ID'
+unique(tempb$donor_id)
+
+colNames1 = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames1)]
+
+## load IAR2 TCRs
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+#test2$study_group2 = ifelse(test2$study_group %in% c("1AAb", "2AAb"), "AAbPos", 
+#						ifelse(test2$study_group %in% c("newT1D"), "newT1D", 
+#						ifelse(test2$study_group %in% c("AAbNeg"), "HC", "other")))
+#test2$study_group = test2$study_group2
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)]
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## subset tcrsComb by HLA-DRB1*04 if desired
+
+#tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 855 E junctions, 135 unique
+libs = E$libid
+E.cell = subset(tcrsComb, tcrsComb$libid %in% libs) # 956
+
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+#   278      8     33     31    704    666
+   
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 956 TRUE 2670 FALSE for junctions; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 12
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 29
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 3548
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 2967
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 1512
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 1433
+
+## modify data
+
+tcrsCombSub3$PITmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 640 T, 2908 F
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3Tra = subset(tcrsCombSub3, tcrsCombSub3$chainType == "TRA") # 1814
+tcrsCombSub3Tra.u = tcrsCombSub3Tra[!duplicated(tcrsCombSub3Tra$junction),] # 1512
+
+tcrsCombSub3Tra$studyGroup = gsub("AAbNeg", "HC", tcrsCombSub3Tra$studyGroup)
+
+toPlot = tcrsCombSub3Tra # 1814 after HLA subsetting
+
+#######################################
+
+ynames = seq(1, 10, by = 1)
+ncy = length(ynames)
+
+for(j in 1:ncy){
+
+## circos plots
+
+## subset TCRs 
+
+tcrs = tcrsCombSub3
+
+anno.tcrs = tcrs
+colnames(anno.tcrs) = gsub("v_gene", "V.gene", colnames(anno.tcrs))
+colnames(anno.tcrs) = gsub("j_gene", "J.gene", colnames(anno.tcrs))
+colnames(anno.tcrs) = gsub("junction", "junction", colnames(anno.tcrs))
+colnames(anno.tcrs) = gsub("libid", "libID", colnames(anno.tcrs)) # 7633
+
+## combined AAb groups
+anno.tcrs$study_group = gsub("1AAb", "AAbPos", anno.tcrs$study_group)
+anno.tcrs$study_group = gsub("2AAb", "AAbPos", anno.tcrs$study_group)
+anno.tcrs$study_group = gsub("AAbNeg", "HC", anno.tcrs$study_group)
+
+
+### reconstruct anno.tcrs 
+
+anno.tcrs.1 = subset(anno.tcrs, study_group == "HC") # 1304
+anno.tcrs.2 = subset(anno.tcrs, study_group == "AAbPos") # 1237
+anno.tcrs.3 = subset(anno.tcrs, study_group == "newT1D") # 3629
+anno.tcrs.4 = subset(anno.tcrs, study_group == "T1D") # 1463
+
+## subset to unique libIDs
+
+anno.tcrs.1u = anno.tcrs.1[!duplicated(anno.tcrs.1$libID),] # 696
+anno.tcrs.2u = anno.tcrs.2[!duplicated(anno.tcrs.2$libID),] # 594
+anno.tcrs.3u = anno.tcrs.3[!duplicated(anno.tcrs.3$libID),] # 1854
+anno.tcrs.4u = anno.tcrs.4[!duplicated(anno.tcrs.4$libID),] # 779
+
+## down sample
+
+size = min(c(length(unique(anno.tcrs.1$libID)), length(unique(anno.tcrs.2$libID)), length(unique(anno.tcrs.3$libID)), length(unique(anno.tcrs.4$libID))))
+size = min(c(length(unique(anno.tcrs.1$donor_id)), length(unique(anno.tcrs.2$donor_id)), length(unique(anno.tcrs.3$donor_id)), length(unique(anno.tcrs.4$donor_id)))) # 13
+
+##  by cells
+
+d1 = unique(anno.tcrs.1$libID); length(d1) # 696
+d2 = unique(anno.tcrs.2$libID); length(d2) # 594
+d3 = unique(anno.tcrs.3$libID); length(d3) # 1854
+d4 = unique(anno.tcrs.4$libID); length(d4) # 779
+
+d1s = sample(d1, size = size); length(d1s) # 594
+d2s = sample(d2, size = size); length(d2s) # 594
+d3s = sample(d3, size = size); length(d3s) # 594
+d4s = sample(d4, size = size); length(d4s) # 594
+
+anno.tcrs.1s = subset(anno.tcrs.1, anno.tcrs.1$libID %in% d1s); nrow(anno.tcrs.1s) # 114
+anno.tcrs.2s = subset(anno.tcrs.2, anno.tcrs.2$libID %in% d2s); nrow(anno.tcrs.2s) # 1237
+anno.tcrs.3s = subset(anno.tcrs.3, anno.tcrs.3$libID %in% d3s); nrow(anno.tcrs.3s) # 1161
+anno.tcrs.4s = subset(anno.tcrs.4, anno.tcrs.4$libID %in% d4s); nrow(anno.tcrs.4s) # 1117
+
+##  by donors
+
+d1 = unique(anno.tcrs.1$donor_id)
+d2 = unique(anno.tcrs.2$donor_id)
+d3 = unique(anno.tcrs.3$donor_id)
+d4 = unique(anno.tcrs.4$donor_id)
+
+anno.tcrs.1s = subset(anno.tcrs.1, (donor_id) %in% sample(d1, size = size)); nrow(anno.tcrs.1s) # 873
+anno.tcrs.2s = subset(anno.tcrs.2, (donor_id) %in% sample(d2, size = size)); nrow(anno.tcrs.2s) # 1182
+anno.tcrs.3s = subset(anno.tcrs.3, (donor_id) %in% sample(d3, size = size)); nrow(anno.tcrs.3s) # 1125
+anno.tcrs.4s = subset(anno.tcrs.4, (donor_id) %in% sample(d4, size = size)); nrow(anno.tcrs.4s) # 1463
+
+anno.tcrs.1s = anno.tcrs.1s[order(anno.tcrs.1s$donor_id),]
+anno.tcrs.2s = anno.tcrs.2s[order(anno.tcrs.2s$donor_id),]
+anno.tcrs.3s = anno.tcrs.3s[order(anno.tcrs.3s$donor_id),]
+anno.tcrs.4s = anno.tcrs.4s[order(anno.tcrs.2s$donor_id),]
+
+## recombine 
+
+anno.sub  = rbind(anno.tcrs.1s, anno.tcrs.2s, anno.tcrs.3s, anno.tcrs.4s) # 4405
+#anno.sub  = rbind(anno.tcrs.4s, anno.tcrs.4s, anno.tcrs.4s, anno.tcrs.4) # 
+
+
+#### prepare circos plots
+
+chain = c("TRA")
+sub = anno.sub # 4405
+sub = subset(sub, chainType == chain)
+
+#sub = subset(anno.tcrs, anno.tcrs$libID %in%  E.cell$libid) # 246 expanded, 122 unique (i.e., number of E.cells) # 1880
+
+##### trim TCR sequences
+melt.tcrs = sub[,] # 246
+melt.tcrs = melt.tcrs[c("libID", "V.gene", "junction", "study_group", "junction")]
+melt.tcrs$junction = as.character(melt.tcrs$junction) # 246, 122 unique cells
+
+###### combine orig and dest using nt sequence as key
+
+melt.join = merge(melt.tcrs, melt.tcrs, by = "junction", stringsAsFactors = F) # 
+melt.join = subset(melt.join, ! libID.x == libID.y) # 1730, 74 unique cells
+
+melt.join = melt.join[c(1,2,6)]
+colnames(melt.join) = c("junction", "orig", "dest") # 763
+
+##### remove duplicated records 
+
+mju = melt.join # 763
+mju = mju[!duplicated(mju[,]),] # 763
+mju = subset(mju, !orig == dest) # 694, 90 unique
+mju$od1 = paste0(mju$orig, mju$dest)
+mju$od2 = paste0(mju$dest, mju$orig)
+
+#### tabulate repeated pairings for df2
+
+table.mju = ddply(mju,.(orig, dest, od1, od2), plyr::summarize, numdup1 = length(od1), numdup2 = length(od2))
+all(table.mju$numdup1 == table.mju$numdup2) # TRUE
+
+table.mju$orig = as.character(table.mju$orig)
+table.mju$dest = as.character(table.mju$dest)
+table.set = subset(table.mju, table.mju$orig %in% sub$libID | table.mju$dest %in% sub$libID) # 376
+
+df2 = data.frame(orig = as.character(table.set$orig), dest = as.character(table.set$dest), m = as.numeric(table.set$numdup1)) # 376
+
+### create m from df2
+
+m = reshape2::dcast(df2, orig~dest)
+m[is.na(m)] = 0
+
+row.names(m) = m[,1]
+m = m[,-1]
+
+m = m[order(row.names(m)),]
+m = data.frame(m)
+m = as.matrix(m)
+
+## create reference data.frame (df1) with for details on each sample. Need to sort libIDs alphanumerically
+
+libs = data.frame((anno.sub$libID), stringsAsFactors = F) # 993
+libs = unique(libs) # 993
+colnames(libs)[1] = c("libID")
+
+#
+pal = c('#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f','#ff7f00','#cab2d6','#6a3d9a','#ffed6f','#b15928', "gray")	
+
+color = ifelse(libs$libID %in% anno.tcrs.1s$libID, "166,206,227",	
+			ifelse(libs$libID %in% anno.tcrs.2s$libID, "31,120,180",	
+				ifelse(libs$libID %in% anno.tcrs.3s$libID, "178,223,138",	
+					ifelse(libs$libID %in% anno.tcrs.4s$libID, "51,160,44",	"black"))))
+
+df1 = data.frame(orig = libs[,1], color = color)
+df1$orig = as.character(df1$orig)
+
+df1$orig <- factor(df1$orig, levels= libs[,1])
+df1 = df1[(!duplicated(df1$orig)),] # 993
+
+####### 
+
+df1$order = seq(1:nrow(df1))
+row.names(df1) = seq(1:nrow(df1))
+
+##sort order of data.frame and matrix by libID for plotting in circos. Need to uses alphanumeric sorting.
+##
+##define ranges of circos sectors and their colors (both of the sectors and the links)
+##
+
+df1$xmin <- 0
+df1$xmax = nrow(df1)
+
+n<-nrow(df1)
+
+#df1$sum1 <- rowSums(m)
+df1$sum = nrow(m) + ncol(m)
+df1$sum2 <- numeric(n)
+
+rgb = as.character(df1$color)
+df1$color = rgb
+
+df1 <- cbind(df1, matrix(as.numeric(unlist(strsplit(df1$color,","))),nrow=n, byrow=TRUE) )
+names(df1)[ncol(df1)-2:0]<-c("r","g","b")
+df1$rcol<-rgb(df1$r, df1$g, df1$b, max = 255)
+df1$lcol<-rgb(df1$r, df1$g, df1$b, alpha=200, max = 255)
+
+#######
+if(dev.cur()>1) dev.off()
+quartz(width=7,height=7,dpi=72)  ### open plotting window
+
+library(circlize)
+par(mar=rep(0,4))
+circos.clear()
+
+#basic circos graphic parameters
+circos.par(cell.padding=c(0,0,0,0), track.margin=c(0,0.15), start.degree = 90, gap.degree =0)
+
+#sector details
+circos.initialize(factors = df1$orig, xlim = cbind(df1$xmin, df1$xmax))
+
+#plot sectors
+circos.trackPlotRegion(ylim = c(0, 1), factors = df1$orig, track.height=0.1,
+ #panel.fun for each sector
+ panel.fun = function(x, y) {
+   #select details of current sector
+   name = get.cell.meta.data("sector.index")
+   i = get.cell.meta.data("sector.numeric.index")
+   xlim = get.cell.meta.data("xlim")
+   ylim = get.cell.meta.data("ylim")
+
+   #plot labels
+   circos.text(x=mean(xlim), y=2.2, labels=name, direction = "arc", cex=0.002)
+
+   #plot main sector
+   circos.rect(xleft=xlim[1], ybottom=ylim[1], xright=xlim[2], ytop=ylim[2], col = df1$rcol[i], border=df1$rcol[i])
+
+   #blank in part of main sector
+   #circos.rect(xleft=xlim[1], ybottom=ylim[1], xright=xlim[2]-rowSums(m)[i], ytop=ylim[1]+0.3, col = "white", border = "white")
+
+   #white line all the way around
+   #circos.rect(xleft=xlim[1], ybottom=0.3, xright=xlim[2], ytop=0.32, col = "white", border = "white")
+
+   #plot axis
+   circos.axis(labels.cex=0.006, major.at=seq(from=0,to=floor(df1$xmax)[i],by=500)) #, labels.away.percentage = 0.15
+})
+
+##
+##plot links
+##
+#add sum values to df1, marking the x-position of the first links out (sum1) and in (sum2). Updated for further links in loop below.
+df1$sum1 <- nrow(m)
+#df1$sum1 <- colSums(m)
+df1$sum2 <- numeric(n)
+
+#create a data.frame of matrix sorted by element size, to allow largest plotted first
+
+### load df2
+df2.levs = gtools::mixedsort(df2$orig)
+df2.levs = as.character(df2.levs)
+
+df2$orig = as.character(df2$orig)
+df2$dest = as.character(df2$dest)
+df2 = df2[order(df2$orig),]
+
+########plot links
+for(k in 1:nrow(df2)){
+  #i,j reference of flow matrix
+  i<-match(df2$orig[k],df1$orig)
+  j<-match(df2$dest[k],df1$orig)
+#j<-match(df2$dest[k],colnames(m))
+
+  #plot link
+  circos.link(sector.index1=df1$orig[i], point1=c(df1$sum1[i]),
+	sector.index2=df1$orig[j], point2=c(df1$sum1[j]),
+		col = "#808080", rou1=0.74, rou2=0.75, lwd = (df2$m[k]*0.25), h.ratio = 0.2) # replace "#808080" with this: df1$lcol[i]
+		
+		
+  #update sum1 and sum2 for use when plotting the next link
+  #df1$sum1[i] = df1$sum1[i] + abs(m[i, j])
+  #df1$sum2[j] = df1$sum2[j] + abs(m[i, j])
+}
+
+legend("bottomright", unique(unique(anno.sub$study_group)), lwd = 10, col = c("#a6cee3","#1f78b4", "#b2df8a", "#33a02c",	"#fb9a99"), cex = 1.5, bty = "n", title = "cluster");
+
+setwd("~/Desktop/plots_expanded")
+
+filename = paste("circos_T1D_stages_", chain, j, ".pdf", sep = "_")
+dev.copy2pdf(file= filename)
+dev.off()
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+## subset to expanded TCRs or not. 
+
+toPlot1 = subset(toPlot, expanded == "E") # 467 or 26%
+toPlot2 = subset(toPlot, expanded == "NE") # 1347 or 74%
+
+## summarize no.junctions per study group, PIT match and E
+
+df1 = ddply(toPlot1,.(studyGroup), plyr::summarize, no. = length(junction))#
+df2 = ddply(toPlot2,.(studyGroup), plyr::summarize, no. = length(junction))#
+
+df1 # all E cells
+#  studyGroup no.
+#1       1AAb  12
+#2       2AAb  15
+#3         HC 145
+#4     newT1D  55
+#5        T1D 240
+
+df2 # all NE cells
+#  studyGroup no.
+#1       1AAb 219
+#2       2AAb  65
+#3         HC 297
+#4     newT1D 335
+#5        T1D 431
+
+df1 = ddply(toPlot1,.(studyGroup, PITmatch), plyr::summarize, no. = length(junction))#
+df1$studyGroup = factor(df1$studyGroup, levels = c("HC", "1AAb", "2AAb", "newT1D", "T1D"))
+
+sizeExpand1 = ddply(df1,.(studyGroup), plyr::summarize, sum = sum(no.)) # same as original df1
+
+df1$tot = sizeExpand1$sum[match(df1$studyGroup, sizeExpand1$studyGroup)]
+df1$freq = df1$no./df1$tot
+df1$E = c("Expanded")
+
+df2 = ddply(toPlot2,.(studyGroup, PITmatch), plyr::summarize, no. = length(junction))#
+df2$studyGroup = factor(df2$studyGroup, levels = c("HC", "1AAb", "2AAb", "newT1D", "T1D"))
+
+sizeExpand1 = ddply(df2,.(studyGroup), plyr::summarize, sum = sum(no.)) # same as original df2
+
+df2$tot = sizeExpand1$sum[match(df2$studyGroup, sizeExpand1$studyGroup)]
+df2$freq = df2$no./df2$tot
+df2$E = c("non-Expanded")
+
+df3 = rbind(df1, df2)
+
+## bar plots 
+
+if(dev.cur() >1) dev.off()
+quartz(height = 8, width = 14, dpi =72);
+## set defaults
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(df3, aes(x = studyGroup, y = freq)) + geom_col(position = "stack", aes(fill = PITmatch), alpha = 01) + scale_fill_manual(values= cbPalette)
+last_plot() + facet_wrap(~E)
+
+xlab = "\nGroup"
+ylab = "PIT matches, \nfraction TRA junctions\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + scale_y_continuous(limits = c(0, 1.20), breaks = c(0, 0.25, 0.5, 0.75, 1.0))
+last_plot() + theme(axis.text.x=element_text(angle=45, hjust=1))
+
+p = last_plot()
+
+setwd("/Users/peterlinsley/Desktop/plots")
+filename = "Fig1F_frxn_PIT_matches_by_junction_facet_expanded_cells.pdf"
+
+ggsave(filename, p)
+
+## tally donors per study group
+
+noDonorPerStudyGroup = ddply(toPlot1,.(PITmatch, studyGroup), plyr::summarize, no. = length(unique(donor_id)))#
+noDonorPerStudyGroup = ddply(toPlot1,.(studyGroup), plyr::summarize, no. = length(unique(donor_id)))#
+
+## tests
+
+df3 = df1
+
+var1T = subset(df3, studyGroup == "HC" & PITmatch == "TRUE")
+var2T = subset(df3, studyGroup == "1AAb" & PITmatch == "TRUE")
+var3T = subset(df3, studyGroup == "2AAb" & PITmatch == "TRUE")
+var4T = subset(df3, studyGroup == "newT1D" & PITmatch == "TRUE")
+var5T = subset(df3, studyGroup == "T1D" & PITmatch == "TRUE")
+
+a = c(var1T[,3], var1T[,4]-(var1T[,3])) #HC
+b = c(var2T[,3], var2T[,4]-(var2T[,3])) #1AAb
+c = c(var3T[,3], var3T[,4]-(var3T[,3])) #2AAb
+d = c(var4T[,3], var4T[,4]-(var4T[,3])) #newT1D
+e = c(var5T[,3], var5T[,4]-(var5T[,3])) #T1D
+
+test1 = fisher.test(rbind(a,b)); test1$p.value # 0.2593765
+test2 = fisher.test(rbind(a,c)); test2$p.value # 0.3196983
+test3 = fisher.test(rbind(a,d)); test3$p.value # 9.725188e-09
+test4 = fisher.test(rbind(a,e)); test4$p.value # 0.2481896
+test5 = fisher.test(rbind(b,c)); test5$p.value # 0.7645594
+test6 = fisher.test(rbind(b,d)); test6$p.value # 0.0003770488
+test7 = fisher.test(rbind(b,e)); test7$p.value # 0.8624644
+test8 = fisher.test(rbind(c,d)); test8$p.value # 0.08890552
+test9 = fisher.test(rbind(c,e)); test9$p.value #  0.6766067
+test10 = fisher.test(rbind(d,e)); test10$p.value # 1.091219e-07
+
+## NB. None of NE comparisons were significant. 
+
+## adjust by manually copied p-values for muiltiple testing
+
+pAdj = p.adjust(c(0.2593765, 0.3196983, 9.725188e-09, 0.2481896,0.7645594, 0.0003770488, 0.8624644, 0.08890552, 0.6766067, 1.091219e-07))
+pAdj
+#[1] 1.000000e+00 1.000000e+00 9.725188e-08 1.000000e+00 1.000000e+00 3.016390e-03 1.000000e+00
+# [8] 6.223386e-01 1.000000e+00 9.820971e-07
+
+## adjust by test p-values for muiltiple testing
+
+result = c(test1$p.value, test2$p.value, test3$p.value, test4$p.value, test5$p.value, test6$p.value, test7$p.value, test8$p.value, test9$p.value, test10$p.value)
+p.adjust(result)
+# [1] 1.000000e+00 1.000000e+00 9.725188e-08 1.000000e+00 1.000000e+00 3.016390e-03 1.000000e+00
+# [8] 6.223386e-01 1.000000e+00 9.820975e-07
+
+############################
+## tallies of junctions, cells and donors
+
+# all cells IAR1 (Cohort 1) only 
+
+toCount = tcrsCombSub3 
+
+toCount = subset(toCount, set == "IAR1")
+
+length(unique(toCount$libid)) # 2784
+length(unique(toCount$junction)) # 4331
+length(unique(toCount$donor_id)) # 53
+
+toCount1A = subset(toCount, chainType == "TRA")
+length(unique(toCount1A$libid)) # 2447
+length(unique(toCount1A$junction)) # 2174
+length(unique(toCount1A$donor_id)) # 53
+
+toCount1B = subset(toCount, chainType == "TRB")
+length(unique(toCount1B$libid)) # 2512
+length(unique(toCount1B$junction)) # 2136
+length(unique(toCount1B$donor_id)) # 53
+
+noLibsStudyGroup = data.frame(ddply(toCount,.(study_group), plyr::summarize, length(libid)))
+noLibsStudyGroup
+#  study_group  ..1
+#1          HC  763
+#2      newT1D 2920
+#3         T1D 1655
+
+noDonorsStudyGroup = data.frame(ddply(toCount,.(study_group, donor_id), plyr::summarize, length(libid)))
+table(noDonorsStudyGroup$study_group)
+
+#  HC newT1D    T1D 
+#    11     26     16 
+
+# IAR1 and IAR2 HLA-DRB1*04 subset
+
+toCount = toPlot 
+
+#toCount = subset(toCount, set == "IAR1")
+
+length(unique(toCount$libid)) # 1873
+length(unique(toCount$junction)) # 2967
+length(unique(toCount$donor_id)) # 43
+
+toCount1A = subset(toCount, chainType == "TRA")
+length(unique(toCount1A$libid)) # 1643
+length(unique(toCount1A$junction)) # 1512
+length(unique(toCount1A$donor_id)) # 43
+
+toCount1B = subset(toCount, chainType == "TRB")
+length(unique(toCount1B$libid)) # 1664
+length(unique(toCount1B$junction)) # 1433
+length(unique(toCount1B$donor_id)) # 43
+
+noLibsStudyGroup = data.frame(ddply(toCount,.(study_group), plyr::summarize, length(libid)))
+noLibsStudyGroup
+#  study_group ..1
+#1        1AAb  231
+#2        2AAb  80
+#3      AAbNeg   54
+#4          HC  388
+#5      newT1D  390
+#6         T1D 671
+
+noDonorsStudyGroup = data.frame(ddply(toCount,.(study_group, donor_id), plyr::summarize, length(libid)))
+table(noDonorsStudyGroup$study_group)
+#1AAb   2AAb AAbNeg     HC newT1D    T1D 
+#     4      3      3     10     11     12 
+
+sum(table(noDonorsStudyGroup$study_group)) # 43 donors
+
+## fraction E cells from DRB*04 subset
+
+length(unique(E.cell$libid)) # 492
+length(unique(toCount$libid)) # 1643
+
+## Cohort 1 both junctions, no HLA subsetting
+
+toCount = tcrsCombSub3 
+
+toCount1 = subset(toCount, set == "IAR1")
+
+length(unique(toCount1$libid)) # 2784
+length(unique(toCount1$junction)) # 4331
+length(unique(toCount1$donor_id)) # 53
+
+toCount1A = subset(toCount, set == "IAR1" & chainType == "TRA")
+
+length(unique(toCount1A$libid)) # 2447
+length(unique(toCount1A$junction)) # 2174
+length(unique(toCount1A$donor_id)) # 53
+
+toCount1B = subset(toCount, set == "IAR1" & chainType == "TRB")
+
+length(unique(toCount1B$libid)) # 2447
+length(unique(toCount1B$junction)) # 2174
+length(unique(toCount1B$donor_id)) # 53
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

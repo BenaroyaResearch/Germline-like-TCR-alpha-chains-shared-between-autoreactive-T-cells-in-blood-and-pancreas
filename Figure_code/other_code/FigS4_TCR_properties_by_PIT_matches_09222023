@@ -1,0 +1,352 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(gdata)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+library(scales)
+library(Peptides)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load TCRs
+
+levIAR1 = read.csv("Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+lev = levIAR1
+
+levSub = subset(lev, lv <2); nrow(levSub) # 1389
+
+###########################
+## Compare IMGT parameters
+
+## compare segment sequence features for PIT matching and non-matching TRA chains
+
+imgt = read.delim("3_Nt-sequences.txt", stringsAsFactors = F)
+
+imgt$lenN = nchar(imgt$N.REGION) + nchar(imgt$N1.REGION)
+imgt$juncLen = nchar(imgt$JUNCTION) 
+imgt$threeVRegion = nchar(imgt$X3.V.REGION) 
+imgt$fiveJRegion = nchar(imgt$X5.J.REGION) 
+imgt$JRegion = nchar(imgt$J.REGION) 
+imgt$cdr1 = nchar(imgt$CDR1.IMGT)
+imgt$cdr2 = nchar(imgt$CDR2.IMGT)
+imgt$cdr3 = nchar(imgt$CDR3.IMGT)
+imgt$fr1 = nchar(imgt$FR1.IMGT)
+imgt$fr2 = nchar(imgt$FR2.IMGT)
+imgt$fr3 = nchar(imgt$FR3.IMGT)
+imgt$fr4 = nchar(imgt$FR4.IMGT)
+
+imgt$chainType = ifelse(imgt$V.GENE.and.allele %in% grep("TRA", imgt$V.GENE.and.allele, value = T), "TRA", 
+					ifelse(imgt$V.GENE.and.allele %in% grep("TRB", imgt$V.GENE.and.allele, value = T), "TRB", "other"))
+
+seqId = data.frame(strsplit2(imgt$Sequence.ID, split = "_"))
+colnames(seqId) = c("libid", "junction")
+
+imgt.df = data.frame(imgt$Sequence.ID, seqId$libid, imgt$chainType, seqId$junction, group = "IAR", imgt$juncLen, imgt$cdr1, imgt$cdr2, imgt$cdr3, imgt$lenN, imgt$threeVRegion, imgt$fiveJRegion)
+colnames(imgt.df) = c("seqId", "libid", "chainType", "junction", "group","juncLen", "CDR1", "CDR2", "CDR3", "NRegion", "threeVRegion", "fiveJRegion")
+
+imgt.df$hydro = hydrophobicity( imgt.df$junction, scale = "Eisenberg")
+
+#imgt.df$isletMatch = imgt.df$junction %in% levSub$aJunc1 # 573 TRUE
+imgt.df$PITmatch = imgt.df$junction %in% levSub$aJunc1 # 573 TRUE
+#imgt.df$PITmatch = factor(imgt.df$PITmatch, levels = c("TRUE", "FALSE"))
+
+imgtTra = subset(imgt.df, chainType == "TRA") # 1606
+imgtTrb = subset(imgt.df, chainType == "TRB") # 1562
+
+traMatchT = subset(imgtTra,PITmatch == "TRUE") # 573
+traMatchF = subset(imgtTra,PITmatch == "FALSE") # 1033
+
+## identify subset of TRB chains that pair with PITmatched TRA chains & add PIT matching status for TRA chains
+
+imgtTrb$PITmatch = ifelse(imgtTrb$libid %in% traMatchT$libid, "TRUE", "FALSE") # 492 TRUE, 1070 FALSE
+
+trbMatchT = subset(imgtTrb,PITmatch == "TRUE") # 492
+trbMatchF = subset(imgtTrb,PITmatch == "FALSE") # 1070
+
+## statistics
+## summarize CDR1, CDR2, NRegion and threeV Region length 
+
+summary(traMatchT$CDR1) # 18 median 
+summary(traMatchF$CDR1) # 18 median
+
+summary(traMatchT$CDR2) # 21
+summary(traMatchF$CDR2) # 21
+
+summary(traMatchT$CDR3) # 33
+summary(traMatchF$CDR3) # 36
+
+summary(traMatchT$NRegion) # 3 nt
+summary(traMatchF$NRegion) # 5 nt
+
+summary(traMatchT$threeVRegion) # 10 nt
+summary(traMatchF$threeVRegion) # 11 nt
+
+summary(traMatchT$fiveJRegion) # 27 nt
+summary(traMatchF$fiveJRegion) # 25 nt
+
+summary(trbMatchT$CDR1) # 15 median 
+summary(trbMatchF$CDR1) # 15 median
+
+summary(trbMatchT$CDR2) # 18
+summary(trbMatchF$CDR2) # 18
+
+summary(trbMatchT$NRegion) # 3 nt
+summary(trbMatchF$NRegion) # 3 nt
+
+summary(trbMatchT$threeVRegion) # 13 nt
+summary(trbMatchF$threeVRegion) # 13 nt
+
+summary(trbMatchT$fiveJRegion) # 17 nt
+summary(trbMatchF$fiveJRegion) # 17 nt
+
+## KS tests
+test1 = ks.test(traMatchT$CDR1, traMatchF$CDR1, alternative = "two.sided"); test1 #p-value = 1.79e-05; 
+test2 = ks.test(traMatchT$CDR2, traMatchF$CDR2, alternative = "two.sided"); test2 #p-value = 0.8836 ;
+test3 = ks.test(traMatchT$CDR3, traMatchF$CDR3, alternative = "two.sided"); test3 #p-value = 4.441e-16 ;
+test4 = ks.test(traMatchT$NRegion, traMatchF$NRegion, alternative = "two.sided"); test4 #p-value = < 2.2e-16 for hydro TRB; 
+test5 = ks.test(traMatchT$threeVRegion, traMatchF$threeVRegion, alternative = "two.sided"); test5 #p-value = 6.361e-09 for junction TRB; 
+test6 = ks.test(traMatchT$fiveJRegion, traMatchF$fiveJRegion, alternative = "two.sided"); test6 #p-value = 1.132e-09; 
+
+test7 = ks.test(trbMatchT$CDR1, trbMatchF$CDR1, alternative = "two.sided"); test1 #p-value = 1.79e-05; 
+test8 = ks.test(trbMatchT$CDR2, trbMatchF$CDR2, alternative = "two.sided"); test2 #p-value = 0.8836 ;
+test9 = ks.test(trbMatchT$CDR3, trbMatchF$CDR3, alternative = "two.sided"); test3 #p-value = 4.441e-16 ;
+test10 = ks.test(trbMatchT$NRegion, trbMatchF$NRegion, alternative = "two.sided"); test4 #p-value = < 2.2e-16 for hydro TRB; 
+test11 = ks.test(trbMatchT$threeVRegion, trbMatchF$threeVRegion, alternative = "two.sided"); test5 #p-value = 6.361e-09 for junction TRB; 
+test12 = ks.test(trbMatchT$fiveJRegion, trbMatchF$fiveJRegion, alternative = "two.sided"); test6 #p-value = 1.132e-09; 
+
+## use **** for both TRA juncLen and hydro; NS for both TRB juncLen and hydro
+
+###################### 
+## for TRA junctions
+
+toPlotName = c("imgtTra")
+toPlot = get(toPlotName) # select TRA or TRB chains
+
+## CDR1
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = CDR1)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 1)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nJunc length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$CDR1), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$CDR1), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4A_", toPlotName, "_CDR1_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
+## CDR2
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = CDR2)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 1)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nJunc length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$CDR2), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$CDR2), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4B_", toPlotName, "_CDR2_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
+## CDR3
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = CDR3)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 1)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nJunc length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$CDR3), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$CDR3), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4C_", toPlotName, "_CDR3_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
+## N Region
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = NRegion)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 0.5)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nNRegion length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$NRegion), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$NRegion), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4D_", toPlotName, "_NRegion_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
+## threeVRegion
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = threeVRegion)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 1)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nthreeVRegion length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$threeVRegion), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$threeVRegion), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4E_", toPlotName, "_threeVRegion_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
+## fiveJRegion
+
+if(dev.cur()>1) dev.off()
+quartz(width=11,height=8, dpi=72)  ### open plotting window
+update_geom_defaults("line", aes(size = 2))
+update_geom_defaults("point", aes(size = 2))
+
+theme_set(theme_bw(36) + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) + theme(legend.key = element_blank()))
+
+cbPalette = c('#66c2a5','#fc8d62', 'gray')
+
+ggplot(toPlot, aes(x = fiveJRegion)) + geom_density(aes(fill = PITmatch), alpha = 0.5, adjust = 1)
+#last_plot() + theme(legend.spacing.y = unit(0.5, 'cm')) + guides(fill = guide_legend(byrow = TRUE))
+
+xlab = "\nfiveJRegion length (nt)"
+ylab = "Density\n"
+last_plot() + labs(x = xlab, y = ylab)
+last_plot() + geom_vline(xintercept = median(traMatchT$fiveJRegion), lty = "solid")
+last_plot() + geom_vline(xintercept = median(traMatchF$fiveJRegion), lty = "dashed")
+last_plot() + scale_fill_manual(values=cbPalette)
+
+p = last_plot()
+
+forLab = ggplot_build(p)
+
+Y = 0.9*(max(forLab$data[[1]]$density))
+X = 1*(min((forLab$data[[1]]$x)))
+
+label = paste("KS test, \np-value =", scientific(test1$p.value, 2), sep = " ")
+#last_plot() + annotate("text", X, Y, label = label, size = 8, hjust = 0)
+
+p = last_plot()
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/Figure_PDFs/")
+filename = paste0("FigS4F_", toPlotName, "_fiveJRegion_length_by_PITmatch.pdf") #TRA
+
+ggsave(filename, p)
+
