@@ -1,0 +1,354 @@
+rm(list = ls())
+require(Biostrings)
+require(limma)
+require(plyr)
+require(readxl)
+library(reshape2)
+library(psych)
+library(ggplot2)
+library(r2symbols)
+library(stringdist)
+
+setwd("/Users/peterlinsley/Desktop/PIT_TCR_paper_code/data") # folder containing data required to generate figures
+
+## load matches
+
+levIAR1 = read.csv("Levenshtein_index_IAR_CD4_with_islet_TCRS_lv.lt9.csv", stringsAsFactors = F)
+
+filename = ("Levenshtein_index_P324_P474_IAR_CD4_with_islet_TCRS_lv.lt6.csv")
+
+levIAR2 = read.csv(filename, stringsAsFactors = F)
+
+levSubIAR1 = subset(levIAR1, levIAR1$lv <2); nrow(levSubIAR1) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+levSubIAR2 = subset(levIAR2, levIAR2$lv <2); nrow(levSubIAR2) # 1389 (573 unique) with IAR1; 1343 (555 unique(with IAR2)
+
+## load IAR1 TCRs
+
+IAR1Tcrs = read.csv("201512_TCR_MasterList_w_CloneIDs.csv", stringsAsFactors = F) # 5417
+colnames(IAR1Tcrs) = gsub("tcrGraph_sharing_level", "sharing_level", colnames(IAR1Tcrs))
+
+IAR1Tcrs = data.frame(IAR1Tcrs, set = "IAR1")
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames)]
+IAR1Tcrs$study_group = gsub("early onset T1D", "newT1D", IAR1Tcrs$study_group)
+
+## create IAR1 hla
+
+hla = read_excel("subject_char_w_HLA.xlsx")
+
+## correct donor id
+
+hla$'Subject ID' = gsub('TID', "T1D", hla$'Subject ID')
+
+## load ID key
+
+idKey = read_excel("P91_P168 Sample_ID_key.xlsx")
+
+idKey$tcrId = gsub("HC10, Ctrl10", "CTRL10", idKey$tcrId)
+
+## remove whitespace
+
+hla$'Subject ID' = stringr::str_trim(hla$'Subject ID')
+idKey$suppTabId = stringr::str_trim(idKey$suppTabId)
+IAR1Tcrs$donor_id = stringr::str_trim(IAR1Tcrs$donor_id)
+
+## add suppTabId and then match HLA
+
+IAR1Tcrs$suppTabId = idKey$suppTabId[match(IAR1Tcrs$donor_id, idKey$tcrId)]
+IAR1Tcrs$hla = hla$DRB1[match(IAR1Tcrs$suppTabId, hla$"Subject ID")]
+
+## check to see that HLA is present for most donos
+
+temp = subset(IAR1Tcrs, is.na(IAR1Tcrs$hla)) # 0/5417. 
+unique(temp$donor_id) #0
+
+tempa = subset(hla, hla$"Subject ID" == "CTRL10")
+tempb = subset(IAR1Tcrs, IAR1Tcrs$donor_id == "CTRL10")
+
+tempa$'Subject ID'
+unique(tempb$donor_id)
+
+colNames1 = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR1Tcrs = IAR1Tcrs[c(colNames1)] # 5417
+
+## load IAR2 TCRs
+
+anno.filename = "P325_P474_comb_CD4+_anno_w_hla.txt"
+tcrs.filename = "P325_P474_comb_CD4+_TCR_w_hla.txt"
+
+test1 = read.delim(anno.filename, stringsAsFactors = F)
+test2 = read.delim(tcrs.filename, stringsAsFactors = F)
+
+test2$donor_id = test1$donorId[match(test2$libid, test1$libid)]
+test2$study_group = test1$studyGroup2[match(test2$libid, test1$libid)]
+test2$study_group = gsub("roT1D", "newT1D", test2$study_group)
+
+test2 = subset(test2, !study_group == "estT1D")
+
+#test2$study_group2 = ifelse(test2$study_group %in% c("1AAb", "2AAb"), "AAbPos", 
+#						ifelse(test2$study_group %in% c("newT1D"), "newT1D", 
+#						ifelse(test2$study_group %in% c("AAbNeg"), "HC", "other")))
+#test2$study_group = test2$study_group2
+
+IAR2Tcrs = data.frame(test2, set = "IAR2")
+IAR2Tcrs$hla = test1$hla[match(IAR2Tcrs$donor_id, test1$donorId)]
+
+colNames = c("libid", "v_gene", "j_gene", "junction", "project", "donor_id", "set", "study_group", "hla")
+
+IAR2Tcrs = IAR2Tcrs[c(colNames)] # 2310
+
+## combine set 1 amd set2
+
+tcrsComb = rbind(IAR1Tcrs, IAR2Tcrs) # 7727
+
+tcrsComb$studyGroup = tcrsComb$study_group
+
+tcrsComb$studyGroup = factor(tcrsComb$studyGroup, levels = c("HC", "AAbNeg", "1AAb", "2AAb",  "newT1D", "T1D" ))
+
+## subset tcrsComb by HLA-DRB1*04 if desired
+
+#tcrsComb = subset(tcrsComb, tcrsComb$hla %in% grep("04", tcrsComb$hla, value = T)) # 3626 for "04"; 4101 for NOT 04
+
+## determine expanded TCRs
+
+no =  ddply(tcrsComb,.(junction), plyr::summarize, sum = length(libid)) # sum(no$sum) = 7727
+
+cut <- 2
+no.sub = subset(no, sum>=cut) # 474
+
+E = subset(tcrsComb, junction %in% no.sub$junction) # 1672 E junctions, 756 unique for all donors. 
+libs = E$libid
+E.cell = subset(tcrsComb, libid %in% E$libid) #1954
+E.cell$study_group = tcrsComb$study_group[match(E.cell$libid, tcrsComb$libid)] # 1954
+	
+frxn.e = length(unique(E.cell$libid))/length(unique(tcrsComb$libid)) # 24.4%
+	
+table(E.cell$studyGroup)
+
+#HC AAbNeg   1AAb   2AAb newT1D    T1D 
+#   284     23     56    101    812    678 # for all donors
+
+## add expanded cells to tcrsComb
+
+tcrsComb$E = tcrsComb$libid %in% E.cell$libid # 1954 TRUE all donors; 
+tcrsComb$expanded = tcrsComb$E 
+tcrsComb$expanded = gsub("TRUE", "E", tcrsComb$expanded)
+tcrsComb$expanded = gsub("FALSE", "NE", tcrsComb$expanded)
+
+tcrsComb$chainType = ifelse(tcrsComb$v_gene %in% grep("TRA", tcrsComb$v_gene, value = T), "TRA",
+						ifelse(tcrsComb$v_gene %in% grep("TRB", tcrsComb$v_gene, value = T), "TRB","other"))
+
+## remove iNKT and MAIT cell sequencces
+
+iNkt1 = subset(tcrsComb, junction == "CVVSDRGSTLGRLYF")
+iNkt2 = subset(tcrsComb, libid %in% iNkt1$libid)
+mait1 = subset(tcrsComb, v_gene == "TRAV1-2" & (j_gene == "TRAJ33" | j_gene == "TRAJ20" | j_gene == "TRAJ12")) # 18
+mait2 = subset(tcrsComb, libid %in% mait1$libid) # 25
+
+tcrsCombSub3 = subset(tcrsComb, !junction %in% iNkt2$junction) # 
+tcrsCombSub3 = subset(tcrsCombSub3, !junction %in% mait2$junction) # 7633
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 6481
+tcrsTra = subset(tcrsCombSub3.u, chainType == "TRA") # 3264
+tcrsTrb = subset(tcrsCombSub3.u, chainType == "TRB") # 3187
+
+#setwd("/Users/peterlinsley/Dropbox/RNAseq/P91_Karen_Junbao/combined_P91_P168_P325_P474")
+#filename = "combined_IAR1_IAR2_TCRs_filtered_DRB1_04_only.csv"
+#write.csv(tcrsCombSub3, filename)
+
+## get pancreatic TCR seqs from Maki Nakayama, MAKI.NAKAYAMA@CUANSCHUTZ.EDU
+
+mn = readxl::read_excel("220519_scPCR_Illumina.xlsx")
+mn$barcode = seq(1, nrow(mn), by = 1)
+
+comId = c("barcode", "Illumina", "Group", "Case_Tissue", "Subset", "Cell ID" )
+traId = c("Vgene...6", "Jgene...7", "Junction...8", "frame...9")
+trbId = c("Vgene...16", "Jgene...17", "Junction...18", "frame...19")
+
+mnA = mn[,c(comId, traId)]
+mnB = mn[,c(comId, trbId)]
+
+colnames(mnA) = c(comId, "v_gene", "j_gene", "junction", "frame")
+colnames(mnB) = c(comId, "v_gene", "j_gene", "junction", "frame")
+
+mnA$chain = paste(mnA$v_gene, mnA$junction, mnA$j_gene, sep = "_")
+mnB$chain = paste(mnB$v_gene, mnB$junction, mnB$j_gene, sep = "_")
+
+mnTcrs = rbind(mnA, mnB) # 18684
+mnTcrs = subset(mnTcrs, frame == "in-frame") # 14049
+mnTcrs$chainType = ifelse(mnTcrs$v_gene %in% grep("TRA", mnTcrs$v_gene, value = T), "TRA",
+						ifelse(mnTcrs$v_gene %in% grep("TRB", mnTcrs$v_gene, value = T), "TRB", "other"))
+
+length(unique(mnTcrs$junction)) # 9798  
+
+mn.u = mnTcrs[!duplicated(mnTcrs$chain),] # 
+
+## load HLA for pancreatic TCR seqs
+
+mnHla = readxl::read_excel("HLA_Typing.xlsx")
+colnames(mnHla)[1] = c("Sample.ID")
+
+## bring patients IDs into harmony
+mnHla$Sample.ID = gsub(" ", "", mnHla$Sample.ID)
+mnHla$Sample.ID = gsub("IIDP", "iidp", mnHla$Sample.ID)
+mn$Case_Tissue = gsub("_islets", "", mn$Case_Tissue)
+mn$Case_Tissue = gsub("_Islets", "", mn$Case_Tissue)
+
+mnTcrs$Case_Tissue = gsub("_islets", "", mnTcrs$Case_Tissue)
+mnTcrs$Case_Tissue = gsub("_Islets", "", mnTcrs$Case_Tissue)
+
+mnTcrs$drb1 = mnHla$DRB1...4[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+mnTcrs$drb1.1 = mnHla$DRB1...5[match(mnTcrs$Case_Tissue, mnHla$Sample.ID)]
+
+hla0401 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T))
+hla0301 = subset(mnTcrs, mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T))
+hla0404 = subset(mnTcrs, mnTcrs$drb1 %in% grep("04:04", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:04", mnTcrs$drb1.1, value = T))
+hla0101 = subset(mnTcrs, mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T))
+
+mnTcrs$hla = ifelse(mnTcrs$drb1 %in% grep("03:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("03:01", mnTcrs$drb1.1, value = T), "03:01", 
+				ifelse(mnTcrs$drb1 %in% grep("07:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("07:01", mnTcrs$drb1.1, value = T),
+"07:01", 				
+					ifelse(mnTcrs$drb1 %in% grep("04:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("04:01", mnTcrs$drb1.1, value = T), "04:01",
+						ifelse(mnTcrs$drb1 %in% grep("01:01", mnTcrs$drb1, value = T) | mnTcrs$drb1.1 %in% grep("01:01", mnTcrs$drb1.1, value = T), "01:01", "other"))))
+
+
+mnTcrs.u = mnTcrs[!duplicated(mnTcrs$junction),] # 9798 
+						
+mn$hla = mnTcrs$hla[match(mn$Case_Tissue, mnTcrs$Case_Tissue)]
+
+
+##################################
+## add PIT matches
+
+tcrsCombSub3$PITmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 930 T, 4842 F
+tcrsCombSub3$PITmatch = gsub("TRUE", "PIT-matched", tcrsCombSub3$PITmatch)
+tcrsCombSub3$PITmatch = gsub("FALSE", "PIT-non-matched", tcrsCombSub3$PITmatch)
+tcrsCombSub3$PITmatch = factor(tcrsCombSub3$PITmatch, levels = c("PIT-matched", "PIT-non-matched"))
+
+## consolodate groups
+
+tcrsCombSub3$PITmatch = tcrsCombSub3$junction %in% levSubIAR1$aJunc1 | tcrsCombSub3$junction %in% levSubIAR2$aJunc1 # 
+tcrsCombSub3$expanded = factor(tcrsCombSub3$expanded, levels = c("E", "NE")) # 
+
+tcrsCombSub3.u = tcrsCombSub3[!duplicated(tcrsCombSub3$junction),] # 3264
+
+## total
+
+toTest = subset(tcrsCombSub3, !chainType == "other")
+table(toTest$set, toTest$chainType, toTest$PITmatch)
+, ,  = FALSE
+
+      
+        TRA  TRB
+  IAR1 1905 2590
+  IAR2  767 1104
+
+, ,  = TRUE
+
+      
+        TRA  TRB
+  IAR1  820    0
+  IAR2  415    0
+  
+# % PIT TCRs = (820 + 415)/(1905+ 767+ 820 + 415) # 0.3160993
+
+## unique
+
+toTest = subset(tcrsCombSub3.u, !chainType == "other")
+table(toTest$set, toTest$chainType, toTest$PITmatch)
+, ,  = FALSE
+
+      
+        TRA  TRB
+  IAR1 1592 2136
+  IAR2  730 1051
+
+, ,  = TRUE
+
+      
+        TRA  TRB
+  IAR1  582    0
+  IAR2  360    0
+  
+#% PIT TCRs  (582+360)/(582+360+1592+730) # 0.2886029
+
+## total no PIT matches
+
+toTest = subset(tcrsCombSub3, !chainType == "other")
+table(toTest$set, toTest$chainType)
+
+    
+        TRA  TRB
+  IAR1 2725 2590
+  IAR2 1182 1104
+
+## unique no PIT matches
+
+toTest = subset(tcrsCombSub3.u, !chainType == "other")
+table(toTest$set, toTest$chainType)
+
+      TRA  TRB
+  IAR1 2174 2136
+  IAR2 1090 1051
+  
+ ## total no PIT matches no set
+
+toTest = subset(tcrsCombSub3, !chainType == "other")
+table(toTest$chainType)
+
+TRA  TRB 
+3907 3694 
+
+ ## unique no PIT matches no set
+
+toTest = subset(tcrsCombSub3.u, !chainType == "other")
+table(toTest$chainType)
+
+ TRA  TRB 
+3264 3187 
+
+ ## total per set
+
+toTest = subset(tcrsCombSub3, !chainType == "other")
+table(toTest$set)
+
+IAR1 IAR2 
+5315 2286 
+
+ ## unique per set
+
+toTest = subset(tcrsCombSub3.u, !chainType == "other")
+table(toTest$set)
+
+IAR1 IAR2 
+4310 2141
+
+## total PIT matches by chain Type
+
+toTest = subset(tcrsCombSub3, !chainType == "other")
+table(toTest$chainType, toTest$PITmatch)
+
+    FALSE TRUE
+  TRA  2672 1235
+  TRB  3694    0
+  
+  
+## PIT TCRs- total
+
+toTest = subset(mnTcrs, !chainType == "other")
+table(toTest$chainType)
+
+ TRA  TRB 
+6681 7317 
+
+## PIT TCRs- unique
+
+toTest = subset(mnTcrs.u, !chainType == "other")
+table(toTest$chainType)
+
+TRA  TRB 
+4614 5143 
+
